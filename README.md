@@ -10,15 +10,15 @@ Note: **Figure 1**, **Figure S1**, and **Table S1** were not generated in R.
 
 The `Data` directory holds the raw and processed data files to be loaded into the R environment by `figures_and_tables.Rmd`:
 
--   `16S_OTUs.csv` contains *blah blah*.
--   `core_protein_concatenation_tree` contains *blah blah*.
--   `dsDNA_vOTUs_reads.csv` contains *blah blah*.
+-   `16S_OTUs.csv` contains *16S rRNA OTU data* including read counts.
+-   `core_protein_concatenation_tree` is a Newick tree file containing *ssRNA phage phylogeny*.
+-   `dsDNA_vOTUs_reads.csv` contains *dsDNA vOTU data* including read counts.
 -   `dsDNA_vOTU_distances.tab` contains *pairwise genome distances* between 1,059 dsDNA vOTUs and reference phage genomes.
--   `gene_reads.csv` contains *blah blah*.
--   `ssRNA_phage_vOTUs_reads.csv` contains *blah blah*.
--   `nodes.csv.gz` contains *blah blah*.
--   `edges.csv.gz` contains *blah blah*.
--   `viral_cluster_overview.csv` contains *blah blah*.
+-   `gene_reads.csv` contains *viral gene read counts*.
+-   `ssRNA_phage_vOTUs_reads.csv` contains *ssRNA phage vOTU data* including read counts.
+-   `nodes.csv.gz` contains network *node information* from vConTACT2 analysis.
+-   `edges.csv.gz` contains network *edge information* from vConTACT2 analysis.
+-   `viral_cluster_overview.csv` contains *viral cluster information* from vConTACT2 analysis.
 -   `green_genes.csv` contains Greengenes *bacterial taxonomy list*.
 
 The `Figures` directory serves as a location for main and supplementary figures created by the script `figures_and_tables.Rmd` to be exported into.
