@@ -927,7 +927,7 @@ editor_options:
                                  "Continuous" = "CRH",
                                  "Virgin" = "VRH",
                                  "Continuous" = "CS",
-                                 "Virgin" = "VS"))
+                                 "Virgin" = "VS")) %>%
     mutate(COMPARTMENT = fct_recode(SAMPLE,
                                     "Rhizosphere" = "CRH",
                                     "Rhizosphere" = "VRH",
@@ -1498,7 +1498,7 @@ editor_options:
       as_grouped_data(groups = c("PHAGE"), columns = NULL) %>%
       as_flextable() %>% # create flextable
       align(align = "left", part = "all") %>% # left-align
-      compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
+      flextable::compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
               j = "Factor", # on column "Factor"
               value = as_paragraph(as_chunk(PHAGE))) %>% # create a paragraph containing a chunk containing value of `PHAGE`
       hline(i = ~ !is.na(PHAGE), border = officer::fp_border() ) %>%
@@ -2458,7 +2458,7 @@ editor_options:
     as_grouped_data(groups = c("PHAGE"), columns = NULL) %>%
     as_flextable() %>% # create flextable
     align(align = "left", part = "all") %>% # left-align
-    compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
+    flextable::compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
             j = "Factor", # on column "Factor"
             # create a paragraph containing a chunk containing value of `PHAGE`
             value = as_paragraph(as_chunk(PHAGE))) %>%
@@ -2929,7 +2929,7 @@ editor_options:
       as_grouped_data(groups = c("PHAGE"), columns = NULL) %>%
       as_flextable() %>% # create flextable
       align(align = "left", part = "all") %>% # left-align
-      compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
+      flextable::compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
               j = "Factor", # on column "Factor"
               # create a paragraph containing a chunk containing value of `PHAGE`
               value = as_paragraph(as_chunk(PHAGE))) %>%
