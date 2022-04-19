@@ -1,0 +1,3479 @@
+---
+title: "R markdown script used to generate figures and tables in Muscatt et al. 2022 (preprint)"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r install and load packages}
+
+  if(!require(BiocManager)){install.packages("BiocManager")}
+  if(!require(ggtree)){BiocManager::install("ggtree")}
+  if(!require(DESeq2)){BiocManager::install("DESeq2")}
+  library(ggtree)
+  library(DESeq2)
+
+  if (!require("pacman")){install.packages("pacman")}
+  pacman::p_load(BiocGenerics, dendextend, flextable, GGally, ggdendro, ggplotify, ggpubr, grid, here, lemon, lme4, lmerTest, magrittr, MuMIn, phangorn, phyloseq, RColorBrewer, rstatix, sjPlot, cowplot, tidyverse, vegan, vroom, xlsx)
+  
+```
+
+```{r set options}
+
+  i_am("Scripts/figures_and_tables.Rmd") # set where here() starts as the directory which contains Scripts/figures_and_tables.Rmd
+  theme_set(theme_classic()) # set classic theme for ggplot
+  cbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#D55E00") # set colour blind-friendly colour palette for plotting
+  set.seed(123) # set random seed
+  
+```
+
+## Significant expansion of plant root-associated viruses identified from field-grown Oilseed Rape
+
+```{r Supplementary Table S2 - DNA viral population read counts, echo = F}
+
+  DNA_vOTUs <- 
+    read.csv(here("Data/dsDNA_vOTUs_reads.csv")) %>% 
+    as_tibble()
+  # 1,059 dsDNA phage vOTUs + 1 ref phage (ssDNA phage)
+  # raw genome read values (filtered for 1x coverage across 75% of genome sequence)
+
+  write.csv(DNA_vOTUs, file = here("Tables/Table_S2.csv"), row.names = F, quote = T)
+
+```
+
+```{r Similarity of dsDNA vOTUs to previously isolated phage genomes, echo = F}
+
+# calculate average nucleotide identity from pairwise genome distances
+  mash_distances <- 
+    read.delim(here("Data/dsDNA_vOTU_distances.tab"), header = F) %>% # import pairwise genome distances from mash
+    rename("REF_PHAGE" = V1,
+           "vOTU" = V2,
+           "DISTANCE" = V3,
+           "PVAL" = V4,
+           "SHARED_HASHES" = V5) %>%
+    mutate(ANI = (1-DISTANCE)*100) # create ANI column
+
+  # mash_distances %>% 
+  #   group_by(vOTU) %>% 
+  #   filter(ANI == max(ANI)) %>% # keep best hit
+  #   filter(ANI >= 95) # keep ~species-level similarities
+    # one vOTU represents a previously discovered phage genus
+
+```
+
+```{r Supplementary Table S3 - ssRNA viral population read counts, echo = F}
+  
+  ssRNA_phage_vOTUs <- 
+    read.csv(here("Data/ssRNA_phage_vOTUs_reads.csv")) %>% 
+    as_tibble()
+  # 16,541 ssRNA phage vOTUs
+  # raw genome read values (mapped with minid = 0.9, filtered for 1x coverage across 75% of genome sequence)
+
+  write.csv(ssRNA_phage_vOTUs, file = here("Tables/Table_S3.csv"), row.names = F, quote = T)
+
+```
+
+```{r Figure 2A - Shared protein content of recovered vOTUs with all currently available phage genomes as determined by vConTACT2, echo = F}
+  
+# Note: nodes and edges have already beem extracted and saved to file to speed up running this script
+
+# import vConTACT2 network output
+  # ntwk <-
+  #   read.table(here("Data/c1.ntw"),
+  #              header = F, sep = ",", col.names = c("vOTU1", "vOTU2", "Score"))
+
+# extract nodes
+  nodes <- 
+    # ggnet2(ntwk[,-3], mode = "fruchtermanreingold", layout.par = list(list = (niter = 2000)))$data %>% 
+    # rename("GENOME" = "label")
+    read.csv(file = here("Data/nodes.csv.gz"), sep = ",", header = T)
+  
+# extract edges
+  edges <- 
+    # ntwk %>% 
+    # mutate(Pair = paste(vOTU1, vOTU2, sep = ".")) %>% 
+    # gather(key = "Member", value = "GENOME", -Pair, -Score) %>% 
+    # inner_join(nodes, by = "GENOME") # joimn node information
+    read.csv(file = here("Data/edges.csv.gz"), sep = ",", header = T)
+  
+# create data frame of significant viral clusters
+  viral_clusters <- 
+    vroom(here("Data/viral_cluster_overview.csv"), col_names = T, col_types = cols()) %>% # import viral cluster output file from vConTACT2 analysis
+    filter(`P-value` < 0.05) %>% # keep significant clusters
+    select(VC, Size, Members) %>%
+    mutate(Members = str_replace_all(Members, "~", " ")) %>% # remove ~ spacing from reference phage genome names
+    mutate(Members = strsplit(as.character(Members), ",")) %>% # create a list of viral cluster members
+    unnest(Members) %>% # create a new entry for each viral cluster member
+    mutate(SOURCE = case_when(grepl("dsDNA", Members) ~ "dsDNA vOTUs",
+                              grepl("ssRNA", Members) ~ "ssRNA vOTUs", 
+                              TRUE ~ "Reference genomes")) %>% # record whether the viral cluster members are our genomes or reference genomes
+    rename(GENOME = Members)
+  
+# create data frame of node location for genomes in viral clusters
+  VC_nodes <-
+    nodes %>%
+    left_join(viral_clusters, by = "GENOME") %>% # join viral cluster identities
+    filter(!is.na(VC)) # remove genomes not in viral clusters
+  
+# create a minimal plot to save legend
+  plot <- 
+    VC_nodes %>%
+    group_by(SOURCE) %>%
+    arrange(VC) %>%
+    filter(row_number()==1) %>% # keep one row by source to generate legend
+    ggplot(aes(x = x, y = y)) + # plot node locations
+    geom_point(aes(colour = SOURCE),
+               alpha = 0.8, shape = 16, size = 2) + # plot genome nodes coloured by source
+    scale_colour_manual(breaks = c("dsDNA vOTUs", "ssRNA vOTUs", "Reference genomes"),
+                        values = c("red", "blue", "grey75")) +
+    labs(colour = "") +
+    guides(colour = guide_legend(override.aes = list(alpha = 1, size = 3))) + # override colour legend guide
+    theme_minimal() + # remove background annotations
+    theme(legend.title = element_text(size = 12, face = "bold"), # bold legend title
+          legend.text = element_text(size = 10), # set legend text size
+          axis.text = element_blank(), # remove axis text
+          axis.title = element_blank(), # remove axis titles
+          panel.grid = element_blank(), # remove plot panels
+          legend.position = "right", # position legend on the right
+          legend.direction = "vertical") # set legend to vertical
+
+  legend <- get_legend(plot) # save legend
+
+# visualise shared protein-based classification network
+  plot <- 
+    VC_nodes %>%
+    ggplot(aes(x = x, y = y)) + # plot node locations
+    geom_line(data = filter(edges, GENOME %in% VC_nodes$GENOME), aes(group = Pair),
+              color = "black", size = 0.5, alpha = 0.1) + # draw edges
+    geom_point(aes(colour = SOURCE),
+               alpha = 0.8, shape = 16, size = 2) + # plot genome nodes coloured by source
+    scale_colour_manual(breaks = c("dsDNA vOTUs", "ssRNA vOTUs", "Reference genomes"),
+                        values = c("red", "blue", "grey75")) +
+    theme_minimal() + # remove background annotations
+    theme(axis.text = element_blank(), # remove axis text
+          axis.title = element_blank(), # remove axis titles
+          panel.grid = element_blank(), # remove plot panels
+          legend.position = "none") # remove legend
+  
+# save as png 800 x 800 pixels
+  png(file = here("Figures/Figure_2A.png"),
+      width = 800, height = 800)
+  plot
+  dev.off()
+  
+# save legend as pdf 4 x 4 inches
+  pdf(file = here("Figures/Figure_2A_legend.pdf"),
+      width = 4, height = 4)
+  grid.newpage()
+  grid.draw(legend)
+  dev.off()
+  
+```
+
+```{r Number of viral clusters formed}
+
+  # table(VC_nodes$SOURCE)
+    # number of genomes forming viral clusters
+  
+  # as_tibble(VC_nodes) %>%
+  #   select(GENOME, SOURCE, VC) %>%
+  #   group_by(SOURCE) %>%
+  #   summarise(NUM_VCs = n_distinct(VC))
+    # number of viral clusters formed
+
+```
+
+```{r Figure 2B - Formation of genus-level viral clusters by recovery library, echo = F}
+
+# create a data frame of number of DNA vOTUs in VCs
+  df <- 
+    DNA_vOTUs %>% # input DNA vOTU data
+    filter(grepl("dsDNA", vOTU)) %>% # keep DNA vOTUs recovered in this study
+    mutate(across(c(REF_PHAGES_IN_VC, VC_IDENTITY), 
+                  ~ifelse(is.na(.), "SINGLETON", .))) %>% # fill in singletons
+    gather(key = "LIBRARY", value = "PRESENT", c(TOTAL_METAGENOME_PRESENCE, DNA_VIROME_PRESENCE, METATRANSCRIPTOME_PRESENCE)) %>% # convert to long format
+    filter(PRESENT > 0) %>% # keep entries for present vOTUs
+    select(-PRESENT) %>% # drop presence column 
+    group_by(REF_PHAGES_IN_VC, VC_IDENTITY, LIBRARY) %>% 
+    summarise(NUM_PHAGES_IN_VCs = n_distinct(vOTU), .groups = "drop") %>% # count the number of DNA vOTUs in each VC
+    mutate(PROP_PHAGES_IN_VCs = case_when(LIBRARY == "DNA_VIROME_PRESENCE" ~ NUM_PHAGES_IN_VCs / 420,
+                                          LIBRARY == "TOTAL_METAGENOME_PRESENCE" ~ NUM_PHAGES_IN_VCs / 129,
+                                          LIBRARY == "METATRANSCRIPTOME_PRESENCE" ~ NUM_PHAGES_IN_VCs / 527)) %>% # calculate the proportion of DNA vOTUs in VCs
+    mutate(LIBRARY = fct_relevel(LIBRARY, "DNA_VIROME_PRESENCE", "TOTAL_METAGENOME_PRESENCE", "METATRANSCRIPTOME_PRESENCE")) %>% # reorder factor levels for plotting
+    mutate(LIBRARY = fct_recode(LIBRARY, 
+                               "DNA virome\n(n = 420)" = "DNA_VIROME_PRESENCE",
+                               "Total metagenome\n(n = 129)" = "TOTAL_METAGENOME_PRESENCE",
+                               "Metatranscriptome\n(n = 527)" = "METATRANSCRIPTOME_PRESENCE")) %>% # recode recovery libraries
+    mutate(GROUP = paste(REF_PHAGES_IN_VC, VC_IDENTITY)) # combine columns for colouring bar chart
+
+# plot bar chart
+  A <-
+    ggplot(df, aes(x = LIBRARY, y = PROP_PHAGES_IN_VCs)) + # plot the number of phages in VCs
+      geom_bar(aes(fill = factor(GROUP, levels = c("YES VC", "YES OUTLIER", "NO VC", "NO OUTLIER", "SINGLETON SINGLETON"))), 
+               stat = "identity") + # bar plot filled by group
+      scale_fill_manual(values = c("#009E73", "#009E7380", 
+                                   "#D55E00", "#D55E0080", 
+                                   "#CC79A7"),
+                        limits = c("YES VC", "YES OUTLIER",
+                                   "NO VC", "NO OUTLIER",
+                                   "SINGLETON SINGLETON"),
+                        labels = c("In a viral cluster\nwith phage isolates", "Outlier to viral cluster\nwith phage isolates",
+                                   "In a viral cluster\nwithout phage isolates", "Outlier to viral cluster\nwithout phage isolates",
+                                   "Singleton")) +
+      labs(title = "",
+           x = "",
+           y = "Proportion of dsDNA vOTUs", 
+           fill = "Viral cluster identity:") + 
+      theme(axis.title = element_text(size = 12), # set axis title font size
+            axis.text = element_text(size = 10), # set axis text size
+            axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1), # angle x-axis text
+            legend.key.height = unit(2, "line"), # make legend key icons larger
+            legend.position = "bottom", # position legend to bottom
+            legend.justification = c(0, 0.8), # shift legend position
+            legend.title = element_text(size = 12, face = "bold"), # bold legend titles
+            legend.text = element_text(size = 10), # set legend text size
+            legend.direction = "vertical") # set legend to vertical
+
+# create a data frame of number of ssRNA phage vOTUs in VCs
+  df <- 
+    ssRNA_phage_vOTUs %>% # input ssRNA phage vOTU data
+    mutate(across(c(REF_PHAGES_IN_VC, VC_IDENTITY), 
+                  ~ifelse(is.na(.), "SINGLETON", .))) %>% # fill in singletons
+    group_by(REF_PHAGES_IN_VC, VC_IDENTITY) %>% 
+    summarise(NUM_PHAGES_IN_VCs = n_distinct(vOTU), # count the number of ssRNA phage vOTUs in each VC
+              .groups = "drop") %>% 
+    add_row(REF_PHAGES_IN_VC = "NO", VC_IDENTITY = "OUTLIER", NUM_PHAGES_IN_VCs = 0) %>% # add entry with no ssRNA phage vOTUs
+    mutate(PROP_PHAGES_IN_VCs = NUM_PHAGES_IN_VCs / 16541) %>% # calculate the proportion of ssRNA phage vOTUs in VCs
+    mutate(GROUP = paste(REF_PHAGES_IN_VC, VC_IDENTITY)) # combine columns for colouring bar plot
+
+# plot bar chart
+  B <-
+    ggplot(df, aes(x = "Metatranscriptome\n(n = 16,541)", y = PROP_PHAGES_IN_VCs)) + # plot the number of phages in VCs
+      geom_bar(aes(fill = factor(GROUP, levels = c("YES VC", "YES OUTLIER", "NO VC", "NO OUTLIER", "SINGLETON SINGLETON"))),
+               stat = "identity") + # bar plot filled by group
+      scale_fill_manual(drop = F,
+                        values = c("#009E73", "#009E7380", 
+                                   "#D55E00", "#D55E0080", 
+                                   "#CC79A7"),
+                        breaks = c("YES VC", "YES OUTLIER",
+                                   "NO VC", "NO OUTLIER",
+                                   "SINGLETON SINGLETON")) +
+      labs(title = "", 
+           x = "",
+           y = "Proportion of ssRNA vOTUs", 
+           fill = "") + 
+      theme(axis.title = element_text(size = 12), # set axis title size
+            axis.text = element_text(size = 10), # set axis text size
+            axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1), # angle x-axis text
+            legend.position = "none") # remove legend
+  
+  legend <- get_legend(A) # save the legend from A
+  A <- A + theme(legend.position = "none") # remove the legend from A
+  
+  plot <- plot_grid(A, B, legend, nrow = 1, rel_widths = c(1, 0.45, 0.45), labels = "B", label_size = 20) # combine plots
+  
+# save as pdf 4 x 8 inches
+  pdf(file = here("Figures/Figure_2B.pdf"),
+      width = 8, height = 4)
+  plot
+  dev.off()
+  
+```
+
+```{r Figure 2C - Putative bacterial host phyla of vOTUs by recovery library, echo = F}
+
+# create a data frame of predicted bacterial hosts of DNA vOTUs
+  DNA_phage_hosts <- 
+    DNA_vOTUs %>% # input DNA vOTU data
+    filter(grepl("dsDNA", vOTU)) %>% # keep DNA vOTUs recovered in this study
+    mutate(HOST_GENUS = case_when(grepl("Polyangium", HOST_GENUS) ~ "Schlegelella",
+                                  grepl("Actinobacteria bacterium IMCC19121", HOST_NAME) ~ "Unclassified Actinobacteria",
+                                  TRUE ~ HOST_GENUS)) %>% # correct false host genera
+    select(vOTU, HOST_GENBANK_ACCESSION, HOST_GENUS, HOST_NAME) # keep columns of interest
+
+# import Greengenes bacterial taxonomy list
+  host_tax <- 
+    read.table(here("Data/green_genes.tsv"), header = T, sep = "\t", quote = "")
+  
+# create a data frame of DNA phage host taxonomies and library presence for plotting
+  host_tax_DNA <- 
+    host_tax %>% # input green genes taxonomy list
+    filter(Genus %in% DNA_phage_hosts$HOST_GENUS) %>% # keep predicted host genera
+    group_by(Phylum, Class, Order, Family, Genus) %>% 
+    summarise(NUM_HOSTS = n(), .groups = "drop") %>% # count the number of hosts with each taxonomic hierarchy
+    arrange(Genus) %>% # alphabetise genera order
+    group_by(Genus) %>% 
+    filter(NUM_HOSTS == max(NUM_HOSTS)) %>% # keep the most common hierarchy
+    ungroup() %>% 
+    left_join(DNA_phage_hosts, by = c("Genus" = "HOST_GENUS")) %>% # join infecting DNA vOTUs
+    select(vOTU, Phylum:Genus) %>% # select columns of interest
+    mutate(vOTU = factor(vOTU, levels = DNA_phage_hosts$vOTU)) %>% # set vOTU column factor levels
+    complete(vOTU, fill = list(Phylum = "Unassigned",
+                               Class = "Unassigned",
+                               Order = "Unassigned",
+                               Family = "Unassigned",
+                               Genus = "Unassigned")) %>% # complete missing vOTUs (with no predicted host)
+    mutate(Phylum = case_when(Phylum == "Proteobacteria" ~ Class,
+                              TRUE ~ Phylum)) %>% # break down Proteobacteria into classes
+    left_join(select(DNA_vOTUs, c(vOTU, TOTAL_METAGENOME_PRESENCE, DNA_VIROME_PRESENCE, METATRANSCRIPTOME_PRESENCE)), by = "vOTU") %>% # join library presence
+    gather(key = "LIBRARY", value = "PRESENT", c(TOTAL_METAGENOME_PRESENCE, DNA_VIROME_PRESENCE, METATRANSCRIPTOME_PRESENCE)) %>% # convert to long format
+    filter(PRESENT > 0) %>% # keep entries for present vOTUs
+    select(-PRESENT) %>% # drop presence column 
+    mutate(LIBRARY = fct_relevel(LIBRARY, "DNA_VIROME_PRESENCE", "TOTAL_METAGENOME_PRESENCE", "METATRANSCRIPTOME_PRESENCE")) %>% # reorder factor levels for plotting
+    mutate(LIBRARY = fct_recode(LIBRARY, 
+                               "DNA virome\n(n = 178)" = "DNA_VIROME_PRESENCE",
+                               "Total metagenome\n(n = 77)" = "TOTAL_METAGENOME_PRESENCE",
+                               "Metatransriptome\n(n = 268)" = "METATRANSCRIPTOME_PRESENCE")) # recode libraries
+  
+# create a data frame of predicted bacterial hosts of ssRNA phage vOTUs
+  RNA_phage_hosts <- 
+    ssRNA_phage_vOTUs %>% # input ssRNA phage data
+    mutate(HOST_GENUS = case_when(grepl("Candidatus Hodgkinia", HOST_NAME) ~ "Candidatus Hodgkinia",
+                                  grepl("Candidatus Tremblaya", HOST_NAME) ~ "Candidatus Tremblaya",
+                                  grepl("Pseudothermotoga hypogea", HOST_NAME) ~ "Pseudothermotoga",
+                                  grepl("Aurantimicrobium minutum", HOST_NAME) ~ "Aurantimicrobium",
+                                  grepl("Syntrophothermus lipocalidus", HOST_NAME) ~ "Syntrophothermus",
+                                  grepl("Rhodoluna lacicola", HOST_NAME) ~ "Rhodoluna",
+                                  grepl("Actinobacteria bacterium IMCC25003", HOST_NAME) ~ "Unclassified Actinobacteria",
+                             TRUE ~ HOST_GENUS)) %>% # correct false host genera
+    select(vOTU, HOST_GENBANK_ACCESSION, HOST_GENUS, HOST_NAME) # keep columns of interest
+  
+# create a data frame of ssRNA phage host taxonomies for plotting
+  host_tax_RNA <- 
+    host_tax %>% # input green genes taxonomy list
+    filter(Genus %in% RNA_phage_hosts$HOST_GENUS | Species == "Actinobacteria bacterium IMCC25003") %>% # keep predicted host genera
+    group_by(Phylum, Class, Order, Family, Genus) %>% 
+    summarise(NUM_HOSTS = n(), .groups = "drop") %>% # count the number of hosts with each taxonomic hierarchy
+    arrange(Genus) %>% # alphabetise genera order
+    group_by(Genus) %>% 
+    mutate(NUM_HIERARCHIES = n()) %>% # count the number of taxonomic hierarchies
+    ungroup() %>% 
+    filter(NUM_HIERARCHIES == 1 | NUM_HOSTS == max(NUM_HOSTS)) %>% # keep non-redundant hierarchies, or the most common hierarchy
+    left_join(RNA_phage_hosts, by = c("Genus" = "HOST_GENUS")) %>% # join infecting ssRNA phage vOTUs
+    select(vOTU, Phylum:Genus) %>% # select columns of interest
+    mutate(vOTU = factor(vOTU, levels = RNA_phage_hosts$vOTU)) %>% # set vOTU column factor levels
+    complete(vOTU, fill = list(Phylum = "Unassigned",
+                               Class = "Unassigned",
+                               Order = "Unassigned",
+                               Family = "Unassigned",
+                               Genus = "Unassigned")) %>% # complete missing vOTUs (with no predicted host)
+    mutate(Phylum = case_when(Phylum == "Proteobacteria" ~ Class,
+                              TRUE ~ Phylum)) # break down Proteobacteria into classes
+  
+# record the top 10 most common host phyla for plotting
+  top_phyla <- 
+    tibble(Phylum = c(host_tax_DNA$Phylum, host_tax_RNA$Phylum)) %>% 
+    filter(!Phylum == "Unassigned") %>% # remove unassigned hosts
+    group_by(Phylum) %>%
+    count() %>% 
+    ungroup() %>% 
+    arrange(-n) %>% 
+    slice_head(n = 10) # keep 10 most common phyla
+  
+# plot putative host phyla for dsDNA vOTUs by recovery library
+  A <-
+    host_tax_DNA %>% # input dsDNA vOTU host taxonomies and library presence
+    filter(!Genus == "Unassigned") %>% # remove unassigned hosts
+    group_by(LIBRARY, Phylum) %>% 
+    count() %>% 
+    group_by(LIBRARY) %>% 
+    mutate(PROP = n/sum(n)) %>%
+    mutate(Phylum = case_when(Phylum %in% top_phyla$Phylum ~ Phylum,
+                              TRUE ~ "Other")) %>% # set non-top 10 phyla to "other"
+    group_by(LIBRARY, Phylum) %>% 
+    summarise(PROP = sum(PROP)) %>% 
+    ggplot(aes(x = LIBRARY, y = PROP, fill = factor(Phylum, levels = c("Other", top_phyla$Phylum)))) + # plot vOTUs from each library
+      geom_bar(stat = "identity") + # bar plot proportions filled by host phylum
+      labs(title = "",
+           x = "", 
+           y = "Proportion of DNA vOTUs") + 
+      scale_fill_manual(values = c("gray65", brewer.pal(10, "Spectral")),
+                                   drop = F) +
+      theme(axis.title = element_text(size = 12), # set axis title size
+            axis.text = element_text(size = 10), # set axis text size
+            axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1), # angle x-axis text
+            legend.position = "none") # remove legend
+  
+# plot putative host phyla for ssRNA phage vOTUs
+  B <-
+    host_tax_RNA %>% # input ssRNA phage host taxonomies
+    mutate(x = "x") %>% 
+    filter(!Genus == "Unassigned") %>% # remove unassigned hosts
+    mutate(Phylum = case_when(Phylum %in% top_phyla$Phylum ~ Phylum,
+                              TRUE ~ "Other")) %>% # set non-top 10 phyla to "other"
+    group_by(x, Phylum) %>% 
+    count() %>% 
+    group_by(x) %>% 
+    mutate(PROP = n/sum(n)) %>%
+    ggplot(aes(x = "Metatranscriptome\n(n = 1,691)", y = PROP, fill = factor(Phylum, levels = c("Other", top_phyla$Phylum)))) + 
+      geom_bar(stat = "identity") + # bar plot proportions filled by host phylum
+      scale_fill_manual(values = c("gray65", brewer.pal(10, "Spectral")), 
+                        drop = F) + # retain unused factor levels for matching DNA plot
+      labs(title = "",
+           x = "",
+           y = "Proportion of ssRNA phage vOTUs", 
+           fill = "Host Phylum:") + 
+      theme(axis.title = element_text(size = 12), # set axis title size
+            axis.text = element_text(size = 10), # set axis text size
+            axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1), # angle x-axis text
+            legend.justification = c(0, 0.7), # adjust legend position
+            legend.position = "right", # position legend to right
+            legend.title = element_text(size = 12, face = "bold"), # bold legend title
+            legend.text = element_text(size = 10), # set legend text size
+            legend.direction = "vertical") # set legend to vertical
+  
+  legend <- get_legend(B) # save the legend from B
+  B <- B + theme(legend.position = "none") # remove the legend from B
+  
+  plot <- plot_grid(A, B, legend, nrow = 1, rel_widths = c(1, 0.45, 0.45), labels = "C", label_size = 20) # combine plots
+  
+# save as pdf 4 x 8 inches
+  pdf(file = here("Figures/Figure_2C.pdf"),
+      width = 8, height = 4)
+  plot
+  dev.off()
+  
+```
+
+```{r Number of novel Leviviricetes genera/species, echo = F}
+
+  # ssRNA_phage_vOTUs %>% 
+  #   group_by(NOVEL_GENUS) %>% 
+  #   summarise(n_distinct(GENUS))
+    # 683 novel genera, 226 non-novel genera
+  
+  # ssRNA_phage_vOTUs %>% 
+  #   group_by(NOVEL_SPECIES) %>% 
+  #   summarise(n_distinct(SPECIES))
+    # 2,379 novel species, 61 non-novel species
+
+  # ssRNA_phage_vOTUs %>%
+  #   filter(NEAR_COMPLETE == "YES") %>% # keep near-complete ssRNA phage vOTUs
+  #   group_by(NOVEL_GENUS) %>%
+  #   summarise(n_distinct(GENUS))
+    # 557 novel genera, 206 non-novel
+
+```
+
+```{r Supplementary Figure S2 - Phylogenetic assessment of ssRNA vOTUs, echo = F}
+
+# import Newick tree
+  tree <- 
+    read.tree(file = here("Data/core_protein_concatenation_tree"))
+
+# midpoint root the tree
+  tree <- midpoint(tree)
+  
+  # ssRNA_phage_vOTUs %>%
+  #   filter(NEAR_COMPLETE == "YES") %>% # keep near-complete ssRNA phage vOTUs
+  #   group_by(NOVEL_GENUS) %>%
+  #   summarise(n_distinct(vOTU))
+    # 6,217 near-complete vOTUs in novel genera, 5,005 near-complete vOTUs in non-novel genera
+  
+# create data frame with tree metadata
+  metadata <- 
+    tibble(GENOME = tree$tip.label) %>% 
+    mutate(NOVEL = case_when(GENOME %in% filter(ssRNA_phage_vOTUs, NOVEL_GENUS == "YES")$vOTU ~ "vOTUs in novel genera\n(6,217)",
+                             GENOME %in% filter(ssRNA_phage_vOTUs, NOVEL_GENUS == "NO")$vOTU ~ "vOTUs in non-novel genera\n(5,005)",
+                             TRUE ~ "Reference phages\n(1,868)"))
+    
+# plot phylogenetic tree
+  plot <- 
+    ggtree(tree, layout = "rectangular") %<+%
+      select(metadata, c(GENOME, NOVEL)) + # add genera novelty for annotating
+      geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) >= 0.7 & as.numeric(label) < 0.8), size = 1, colour = "black", alpha = 0.4) +  # label node support thresholds
+      geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) >= 0.8 & as.numeric(label) < 0.9), size = 1.5, colour = "black", alpha = 0.4) +
+      geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) >= 0.9), size = 2, colour = "black", alpha = 0.4) + 
+      geom_tippoint(aes(colour = NOVEL), alpha = 0.5, size = 3, na.rm = T) + # label phage nodes by genera novelty
+      geom_treescale(fontsize = 5, offset = 100, x = 3.5, y = 300) + # set tree scale
+      labs(colour = "") +
+      guides(colour = guide_legend(override.aes = list(size = 5))) + # override colour legend guide
+      theme(legend.position = "bottom", # position figure legend on the bottom
+            legend.text = element_text(size = 12)) + # set legend text size
+      scale_color_manual(breaks = c("vOTUs in novel genera\n(6,217)", "vOTUs in non-novel genera\n(5,005)", "Reference phages\n(1,868)"),
+                         values = c("#009E73", "#CC79A7", "grey65"),
+                         na.value = NA) +
+      xlim(NA, 4.8) + # reposition tree
+      geom_cladelabel(node = 16186, label = "italic(Steitzviridae)", parse = T) +  # label Leviviricetes clades
+      geom_cladelabel(node = 21533, label = "italic(Blumeviridae)", parse = T, offset = 0.5) +
+      geom_cladelabel(node = 17892, label = "italic(Fiersviridae)", parse = T) +
+      geom_cladelabel(node = 17582, label = "italic(Solspiviridae)", parse = T, offset = 0.4) +
+      geom_cladelabel(node = 16391, label = "italic(Atkinsviridae)", parse = T, offset = 0.5)
+  
+# save as pdf 12 x 9 inches
+  pdf(file = here("Figures/Figure_S2.pdf"),
+      width = 8, height = 11)
+  plot
+  dev.off()
+    
+# create branch support legend
+  legend <- 
+    tibble(x = c("0.8 > x >= 0.7", "0.9 > x >= 0.8", "x >= 0.9"),
+           size = c(1, 1.5, 2)) %>% 
+      ggplot(aes(x = x, y = 1)) +
+        geom_point(aes(size = size), alpha = 0.4) +
+        theme_void() +
+        scale_size_continuous(breaks = c(1, 1.5, 2), limits = c(1, 2), labels = c("0.8 > x \u2265 0.7", "0.9 > x \u2265 0.8", "x \u2265 0.9")) +
+        guides(size = guide_legend(override.aes = list(size = c(1, 1.5, 2)))) +
+        theme(legend.text = element_text(size = 10),
+              legend.title = element_text(size = 12, face = "bold")) +
+        labs(size = "Branch support:")
+  
+# save legend as pdf 4 x 4 inches
+  pdf(file = here("Figures/Figure_S2_legend.pdf"),
+      width = 4, height = 4)
+  grid.newpage()
+  grid.draw(get_legend(legend))
+  dev.off()
+  
+```
+
+```{r Supplementary Table S4 - 16S rRNA OTU read counts, echo = F}
+
+  OTU_table <- 
+    read.csv(here("Data/16S_OTUs.csv")) %>% 
+    as_tibble()
+  # 32,994 16S rRNA OTUs
+  # raw 16S rRNA read counts
+
+  write.csv(OTU_table, file = here("Tables/Table_S4.csv"), row.names = F, quote = T)
+
+```
+
+```{r Detection of bacterial host genera, echo = F}
+
+  # OTU_table %>% 
+  #   filter(GENUS %in% host_tax_DNA$Genus) %>% 
+  #   summarise(n_distinct(GENUS))
+  # 68/85 dsDNA vOTU host genera detected
+
+  # OTU_table %>% 
+  #   filter(GENUS %in% host_tax_RNA$Genus) %>% 
+  #   summarise(n_distinct(GENUS))
+  # 3/12 ssRNA vOTU host genera detected
+
+```
+
+```{r Prevalence of vOTUs by recovery library, echo = F}
+
+# total number of vOTUs detected (by library)
+  # DNA_vOTUs %>% 
+  #   select(vOTU, TOTAL_METAGENOME_PRESENCE, METATRANSCRIPTOME_PRESENCE, DNA_VIROME_PRESENCE, C1RH:V4S) %>% 
+  #   gather(key = "LIBRARY", value = "PRESENCE", TOTAL_METAGENOME_PRESENCE:DNA_VIROME_PRESENCE) %>% 
+  #   filter(PRESENCE > 0) %>% 
+  #   select(-PRESENCE) %>% 
+  #   gather(key = "SAMPLE_REPEAT", value = "READS", C1RH:V4S) %>% 
+  #   filter(READS > 0) %>% 
+  #   select(-READS) %>% 
+  #   group_by(LIBRARY) %>% 
+  #   summarise(NUM_DETECTED = n_distinct(vOTU))
+    # 382 DNA virome-assembled vOTUs detected
+    # 215 metatranscriptome-assembled vOTUs detected
+    # 116 total metagenome-assembled vOTUs detected
+
+# mean number of samples each library's vOTUs were detected in
+  # DNA_vOTUs %>% 
+  #   select(vOTU, TOTAL_METAGENOME_PRESENCE, METATRANSCRIPTOME_PRESENCE, DNA_VIROME_PRESENCE, C1RH:V4S) %>% 
+  #   gather(key = "LIBRARY", value = "PRESENCE", TOTAL_METAGENOME_PRESENCE:DNA_VIROME_PRESENCE) %>% 
+  #   filter(PRESENCE > 0) %>% 
+  #   select(-PRESENCE) %>% 
+  #   gather(key = "SAMPLE_REPEAT", value = "READS", C1RH:V4S) %>% 
+  #   filter(READS > 0) %>% 
+  #   select(-READS) %>% 
+  #   group_by(vOTU, LIBRARY) %>% 
+  #   summarise(NUM_SAMPLES = n_distinct(SAMPLE_REPEAT), .groups = "drop") %>% 
+  #   group_by(LIBRARY) %>% 
+  #   summarise(MEAN = mean(NUM_SAMPLES))
+    # DNA virome-assembled vOTUs detected in a mean of 1.60 samples
+    # metatranscriptome-assembled vOTUs detected in a mean of 4.31 samples
+    # total metagenome-assembled vOTUs detected in a mean of 2.83 samples
+
+  
+# proportion of library vOTUs by number of samples detected in
+  # DNA_vOTUs %>% 
+  #   select(vOTU, TOTAL_METAGENOME_PRESENCE, METATRANSCRIPTOME_PRESENCE, DNA_VIROME_PRESENCE, C1RH:V4S) %>% 
+  #   gather(key = "LIBRARY", value = "PRESENCE", TOTAL_METAGENOME_PRESENCE:DNA_VIROME_PRESENCE) %>% 
+  #   filter(PRESENCE > 0) %>% 
+  #   select(-PRESENCE) %>% 
+  #   gather(key = "SAMPLE_REPEAT", value = "READS", C1RH:V4S) %>% 
+  #   filter(READS > 0) %>% 
+  #   select(-READS) %>% 
+  #   group_by(vOTU, LIBRARY) %>% 
+  #   summarise(NUM_SAMPLES = n_distinct(SAMPLE_REPEAT), .groups = "drop") %>% 
+  #   group_by(LIBRARY, NUM_SAMPLES) %>% 
+  #   count() %>% 
+  #   group_by(NUM_SAMPLES) %>% 
+  #   mutate(PROPORTION = n/sum(n))
+    # DNA virome-assembled vOTUs represent 80.9% of vOTUs present in only one sample
+    # metatranscriptome-assembled vOTUs represent 70.6% of vOTUs present in at least half of the samples
+
+```
+
+```{r Supplementary Figure S3 - Accumulation curves of vOTUs, echo = F}
+
+# extract read values across samples for DNA vOTUs
+  reads_table <- 
+    DNA_vOTUs %>%
+    select(vOTU, C1RH:V4S) %>%
+    gather(key = "SAMPLE_REPEAT", value = "TPM", -vOTU) %>% 
+    spread(key = "vOTU", value = "TPM", fill = 0) %>% 
+    select(-SAMPLE_REPEAT)
+
+# compute 100 species accumulation curves
+  species_accumulation <- 
+    specaccum(reads_table, method = "random", permutations = 100)
+  
+# record cumulative species richness for each permutation
+  permutations <- 
+    as_tibble(species_accumulation$perm) %>% 
+    mutate(Sites = 1:nrow(.)) %>% 
+    gather(key = "Permutation", value = "Species", -Sites)
+  
+# create data frame of average cumulative species richness across permutations
+  richness <- 
+    tibble(Sites = species_accumulation$sites, Species = species_accumulation$richness)
+  
+# plot species accumulation curve for DNA vOTUs
+  A <- 
+    ggplot(permutations, aes(Sites, Species)) +
+      geom_point(alpha = 0.15) +
+      geom_line(data = richness, size = 1) +
+      scale_x_continuous(limits = c(0, 16),
+                         breaks = seq(0, 16, 4)) +
+      scale_y_continuous(limits = c(0, 800),
+                         breaks = seq(0, 800, 100)) +
+      labs(x = "Sampling Effort\n(number of Samples)",
+           y = "Cumulative Richness\n(number of DNA vOTUs)", 
+           colour = "",
+           title = "") +
+      theme(axis.text = element_text(size = 10),
+            axis.title = element_text(size = 12), 
+            legend.position = "top",
+            panel.border = element_blank()) 
+
+# extract read values across samples for ssRNA phage vOTUs
+  reads_table <- 
+    ssRNA_phage_vOTUs %>%
+    select(vOTU, C1RH_J:V4S_N) %>%
+    gather(key = "SAMPLE_REPEAT", value = "TPM", -vOTU) %>% 
+    spread(key = "vOTU", value = "TPM", fill = 0) %>% 
+    select(-SAMPLE_REPEAT)
+
+# compute 100 species accumulation curves
+  species_accumulation <- 
+    specaccum(reads_table, method = "random", permutations = 100)
+  
+# record cumulative species richness for each permutation
+  permutations <- 
+    as_tibble(species_accumulation$perm) %>% 
+    mutate(Sites = 1:nrow(.)) %>% 
+    gather(key = "Permutation", value = "Species", -Sites)
+  
+# create data frame of average cumulative species richness across permutations
+  richness <- 
+    tibble(Sites = species_accumulation$sites, Species = species_accumulation$richness)
+  
+# plot species accumulation curve for ssRNA phage vOTUs
+  B <- 
+    ggplot(permutations, aes(Sites, Species)) +
+      geom_point(alpha = 0.04) +
+      geom_line(data = richness, size = 1) +
+      scale_x_continuous(limits = c(0, 70),
+                         breaks = seq(0, 70, 10)) +
+      scale_y_continuous(limits = c(0, 12500),
+                         breaks = seq(0, 12500, 2500)) +
+      labs(x = "Sampling Effort\n(number of Samples)",
+           y = "Cumulative Richness\n(number of ssRNA phage vOTUs)", 
+           colour = "",
+           title = "") +
+      theme(axis.text = element_text(size = 10),
+            axis.title = element_text(size = 12), 
+            legend.position = "top",
+            panel.border = element_blank()) 
+
+  left <- plot_grid(A, labels = "A", label_size = 20)
+  right <- plot_grid(B, labels = "B", label_size = 20)
+  
+  plot <- plot_grid(left, right) # combine plots
+  
+# save as pdf 4 x 8 inches
+  pdf(file = here("Figures/Figure_S3.pdf"),
+      width = 8, height = 4)
+  plot
+  dev.off()
+  
+```
+
+```{r Supplementary Table S5 - Viral gene read counts, echo = F}
+
+  gene_reads <- 
+    read.csv(here("Data/gene_reads.csv")) %>% 
+    as_tibble()
+  # genes filtered for at least 4 reads across repeats
+  # raw read count values (mapped with minid = 0.9, extracted gene loci with BEDtools)
+
+  write.csv(gene_reads, file = here("Tables/Table_S5.csv"), row.names = F, quote = T)
+
+```
+
+```{r Activity of vOTUs by recovery library, echo = F}
+
+# total number of DNA vOTUs that were active
+  # gene_reads %>%
+  #   gather(key = "SAMPLE_REPEAT", value = "READS", C1RH_J:V4S_N) %>% # convert to long format
+  #   filter(READS > 0) %>% # keep genes with reads mapped
+  #   group_by(vOTU, GENOME_LENGTH, SAMPLE_REPEAT) %>% 
+  #   summarise(NUM_ACTIVE_GENES = n_distinct(GENE), .groups = "drop") %>% # count the number of genes with reads mapped per contig per sample
+  #   filter(NUM_ACTIVE_GENES / (GENOME_LENGTH/10000) >= 1) %>% # remove vOTUs with less than 1 active gene per 10kb
+  #   mutate(PHAGE = case_when(grepl("dsDNA", vOTU) ~ "Ours",
+  #                            TRUE ~ "Ref")) %>% 
+  #   group_by(PHAGE) %>%
+  #   summarise(NUM_vOTUs = n_distinct(vOTU)) # count the number of active vOTUs
+    # 827 dsDNA vOTUs were active
+    # 63 previously isolated phage genomes were active
+  
+# total number of DNA vOTUs that were active, from each viral fraction
+  # gene_reads %>% # input gene abundances
+  #   gather(key = "SAMPLE_REPEAT", value = "READS", C1RH_J:V4S_N) %>% # convert to long format
+  #   filter(READS > 0) %>% # keep genes with reads mapped
+  #   group_by(vOTU, GENOME_LENGTH, SAMPLE_REPEAT) %>% 
+  #   summarise(NUM_ACTIVE_GENES = n_distinct(GENE), .groups = "drop") %>% # count the number of genes with reads mapped per contig per sample
+  #   filter(NUM_ACTIVE_GENES / (GENOME_LENGTH/10000) >= 1) %>% # remove vOTUs with less than 1 active gene per 10kb
+  #   left_join(select(DNA_vOTUs, c(vOTU, GENOME_LENGTH, DNA_VIROME_PRESENCE, TOTAL_METAGENOME_PRESENCE, METATRANSCRIPTOME_PRESENCE)), by = "vOTU") %>% 
+  #   gather(key = "FRACTION", value = "PRESENCE", c(DNA_VIROME_PRESENCE, TOTAL_METAGENOME_PRESENCE, METATRANSCRIPTOME_PRESENCE)) %>% 
+  #   filter(PRESENCE > 0) %>% 
+  #   group_by(FRACTION) %>% 
+  #   summarise(NUM_vOTUs = n_distinct(vOTU)) # count the number of active vOTUs
+    # 296 DNA virome-assembled vOTUs were active
+    # 444 metatranscriptome-assembled vOTUs were active
+    # 104 total metagenome-assembled vOTUs were active
+  
+# average activity of each fraction's DNA vOTUs
+  # gene_reads %>% 
+  #   mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+  #   mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to transcripts per kb million
+  #   gather(key = "SAMPLE_REPEAT", value = "TPM", C1RH_J:V4S_N) %>% # convert to long format
+  #   filter(TPM > 0) %>% 
+  #   left_join(select(DNA_vOTUs, c(vOTU, DNA_VIROME_PRESENCE, TOTAL_METAGENOME_PRESENCE, METATRANSCRIPTOME_PRESENCE)), by = "vOTU") %>% 
+  #   gather(key = "FRACTION", value = "PRESENCE", c(DNA_VIROME_PRESENCE, TOTAL_METAGENOME_PRESENCE, METATRANSCRIPTOME_PRESENCE)) %>% 
+  #   filter(PRESENCE > 0) %>% 
+  #   group_by(SAMPLE_REPEAT, FRACTION, vOTU) %>% 
+  #   summarise(SUM_TPM = sum(TPM), .groups = "drop") %>% # summed activity of each vOTU
+  #   group_by(FRACTION) %>% 
+  #   summarise(MEDIAN_TPM = median(SUM_TPM)) # median activity of each fraction across compartment and rotation
+    # median TPM across DNA virome-assembled vOTUs was 8.95
+    # median TPM across metatranscriptome-assembled vOTUs was 104.00
+    # median TPM across total metagenome-assembled vOTUs was 10.2
+  
+```
+
+## Plant root association and crop rotation shapes both DNA and RNA viral community composition
+
+```{r Figure 3A -  Alpha diversity of DNA viral community composition and ssRNA phage community composition, echo = F}
+
+# calculate counts per kilobase million (CPKBM) values across samples for ssRNA phage vOTUs
+  CPM_table <- 
+    ssRNA_phage_vOTUs %>% 
+    column_to_rownames("vOTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~round(.))) %>% # round counts per kb million values
+    select(C1RH_J:V4S_N) 
+
+# generate phyloSeq vOTU matrix
+  vOTU_matrix <- otu_table(CPM_table, taxa_are_rows = TRUE) # create PhyloSeq object
+
+# create table of observed vOTU abundance and alpha diversity measures 
+  alpha_div_rna <-
+    estimate_richness(vOTU_matrix, measures = c("Observed", "Simpson", "Shannon")) %>%
+    rownames_to_column("SAMPLE_REPEAT") %>%
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(Month = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(Month = fct_recode(Month,
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>%
+    mutate(Evenness = Shannon / log(Observed)) %>% # compute Pielou's evenness index
+    mutate(Rotation = fct_recode(SAMPLE,
+                                    "Continuous" = "CRH",
+                                    "Virgin" = "VRH",
+                                    "Continuous" = "CRO",
+                                    "Virgin" = "VRO",
+                                    "Continuous" = "CS",
+                                    "Virgin" = "VS")) %>% 
+    mutate(Compartment = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Roots" = "CRO",
+                                    "Roots" = "VRO",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS")) %>% 
+    mutate(Compartment = fct_relevel(Compartment, "Bulk Soil", "Rhizosphere", "Roots")) %>% 
+    rename("Sample" = SAMPLE,
+           "Observed vOTUs" = Observed,
+           "Shannon's H" = Shannon,
+           "Simpson's D" = Simpson,
+           "Pielou's J" = Evenness) %>% 
+    mutate(PHAGE = "ssRNA phage") %>% 
+    select(Sample, Month, Rotation, Compartment, `Shannon's H`, PHAGE)
+  
+# calculate counts per kilobase million (CPKBM) values across samples for DNA phage vOTUs
+  CPM_table <- 
+    DNA_vOTUs %>% # input DNA vOTU data
+    column_to_rownames("vOTU") %>% 
+    mutate(across(C1RH:V4S, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH:V4S, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH:V4S, ~round(.))) %>% # round counts per kb million values
+    select(C1RH:V4S) 
+  
+# generate phyloSeq OTU matrix
+  vOTU_matrix <- otu_table(CPM_table, taxa_are_rows = TRUE) # create PhyloSeq object
+
+# create table of observed vOTU abundance and alpha diversity measures 
+  alpha_div_dna <- 
+    estimate_richness(vOTU_matrix, measures = c("Observed", "Shannon", "Simpson")) %>% 
+    rownames_to_column("SAMPLE_REPEAT") %>%
+    mutate(SAMPLE = gsub('[[:digit:]]', '', SAMPLE_REPEAT)) %>%
+    mutate(Evenness = Shannon / log(Observed)) %>% # compute Pielou's evenness index
+    mutate(Rotation = fct_recode(SAMPLE,
+                                    "Continuous" = "CRH",
+                                    "Virgin" = "VRH",
+                                    "Continuous" = "CS",
+                                    "Virgin" = "VS")) %>% 
+    mutate(Compartment = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS")) %>% 
+    mutate(Compartment = fct_relevel(Compartment, "Bulk Soil", "Rhizosphere")) %>% 
+    rename("Sample" = SAMPLE,
+           "Observed vOTUs" = Observed,
+           "Shannon's H" = Shannon,
+           "Simpson's D" = Simpson,
+           "Pielou's J" = Evenness) %>% 
+    mutate(Month = "Stem extension") %>% 
+    mutate(PHAGE = "DNA viral") %>% 
+    select(Sample, Month, Rotation, Compartment, `Shannon's H`, PHAGE)
+  
+# plot alpha diversities of DNA viral and ssRNA phage communities
+  A <-
+    rbind(alpha_div_rna, alpha_div_dna) %>% 
+    group_by(Sample, Month, Rotation, Compartment, PHAGE) %>% 
+    summarise(MEAN_SHANNON = mean(`Shannon's H`),
+              CI_SHANNON = qt(0.95, n()-1)*sd(`Shannon's H`)/sqrt(n()), .groups = "drop") %>% # compute mean and confidence intervals
+    ggplot(aes(x = Compartment, y = MEAN_SHANNON)) +
+      geom_errorbar(aes(ymin = MEAN_SHANNON-CI_SHANNON, ymax = MEAN_SHANNON+CI_SHANNON, colour = Rotation), 
+                    width = 0.1, position = position_dodge(0.2)) +
+      geom_point(aes(fill = Rotation, shape = Compartment),  
+                 size = 3, stroke = 1, colour = "grey25", alpha = 0.8, position = position_dodge(0.2)) +
+      facet_rep_grid(fct_rev(PHAGE) ~ fct_rev(Month), drop = T, scales = "fixed", repeat.tick.labels = T, labeller = labeller(groupwrap = label_wrap_gen(10))) +
+      scale_fill_manual(values = cbPalette, 
+                        breaks = c("Continuous", "Virgin")) +
+      scale_colour_manual(values = cbPalette, 
+                          breaks = c("Continuous", "Virgin"),
+                          guide = "none") +
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1)),
+             shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1))) +
+      theme(strip.text.x = element_text(size = 14),
+            strip.text.y = element_text(size = 12),
+            strip.placement = "outside",
+            strip.switch.pad.grid = unit(0.5, "cm"),
+            strip.background = element_rect(colour = NA),
+            plot.margin = unit(c(t = 5.5, r = 5.5, b = 0, l = 5.5), "pt"),
+            axis.text = element_text(size = 10),
+            axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+            axis.title = element_text(size = 12), 
+            legend.position = "none") +
+      labs(x = "",
+           y = "Shannon's H", 
+           title = "",
+           shape = "Compartment:",
+           fill = "Rotation:")
+  
+```
+
+```{r Figure 3B - Beta diversity of DNA viral community composition and ssRNA phage community composition, echo = F}
+
+# calculate counts per kilobase million (CPKBM) values across samples for ssRNA phage vOTUs
+  CPM_table <- 
+    ssRNA_phage_vOTUs %>% 
+    column_to_rownames("vOTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("N")) %>% # keep November samples
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis distances
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS"))
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS"))
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# record MDS coordinates
+  df <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress) %>% mutate(PHAGE = "ssRNA phage")
+  
+# record PERMANOVA results
+  df2 <- 
+    as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Seedling") %>% mutate(COMMUNITY = "ssRNA phage")
+  
+# calculate counts per kilobase million (CPKBM) values across samples for ssRNA phage vOTUs
+  CPM_table <- 
+    ssRNA_phage_vOTUs %>% 
+    column_to_rownames("vOTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("M")) %>% # keep March samples
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS"))
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append MDS coordinates
+  df <- 
+    df %>% 
+    rbind(., as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress) %>% mutate(PHAGE = "ssRNA phage"))
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Stem extension") %>% mutate(COMMUNITY = "ssRNA phage"))
+  
+# calculate counts per kilobase million (CPKBM) values across samples for ssRNA phage vOTUs
+  CPM_table <- 
+    ssRNA_phage_vOTUs %>% 
+    column_to_rownames("vOTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("J")) %>% # keep June samples
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilaries
+
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS")) 
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append MDS coordinates
+  df <- 
+    df %>% 
+    rbind(., as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress) %>% mutate(PHAGE = "ssRNA phage"))
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Pre-harvest") %>% mutate(COMMUNITY = "ssRNA phage"))
+  
+# calculate counts per kilobase million (CPKBM) values across samples for DNA vOTUs
+  CPM_table <- 
+    DNA_vOTUs %>%
+    column_to_rownames("vOTU") %>% 
+    mutate(across(C1RH:V4S, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH:V4S, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH:V4S, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH:V4S) 
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', SAMPLE_REPEAT)) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS")) %>%
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS"))
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append MDS coordinates
+  df <- 
+    df %>% 
+    rbind(., as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress) %>% mutate(PHAGE = "DNA viral"))
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Stem extension") %>% mutate(COMMUNITY = "DNA viral"))
+  
+# create data frame of MDS stress values for plotting
+  stress_values <- 
+    df %>% 
+    mutate(MONTH = case_when(PHAGE == "ssRNA phage" ~ str_sub(SAMPLE_REPEAT, -1),
+                             TRUE ~ "M")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "N", "M", "J")) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    select(STRESS, PHAGE, MONTH) %>% 
+    unique() %>% 
+    mutate(x = c(-0.5, -0.3, 0.7, 0.7),
+           y = c(1, 1, 0.7, 0.7))
+  
+# plot NMDS ordinations
+  B <-
+    df %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    mutate(MONTH = case_when(PHAGE == "ssRNA phage" ~ str_sub(SAMPLE_REPEAT, -1),
+                             TRUE ~ "M")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "N", "M", "J")) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    ggplot(aes(MDS1,MDS2)) + # plot the two dimensions of nMDS analysis
+      geom_text(data = stress_values, aes(x = x, y = y, label = paste("Stress =", format(round(STRESS, 2), nsmall = 2))), size = 3) + # label with stress values
+      stat_ellipse(aes(fill = COMPARTMENT, colour = ROTATION), geom = 'polygon', level = 0.95, alpha = 0, linetype = 2, size = 0.9, show.legend = F) + # draw 95% confidence ellipses around sample repeats
+      geom_point(size = 3, alpha = 0.8, stroke = 1, colour = "grey25",
+                 aes(fill = ROTATION, shape = COMPARTMENT)) + # scatter plot
+      labs(x = "Coordinate 1",
+           y = "Coordinate 2",
+           shape = "Compartment:",
+           fill = "Rotation:",
+           title = "") +
+      facet_rep_grid(fct_rev(PHAGE) ~ MONTH, drop = T, scales = "free") +
+      scale_fill_manual(values = cbPalette, breaks = c("Continuous", "Virgin")) + 
+      scale_colour_manual(values = cbPalette, guide = "none") + 
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1)),
+             shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1))) + # override fill and shape legend guides
+      theme(axis.text = element_blank(), 
+            axis.ticks = element_blank(), # remove axis tick marks
+            axis.title = element_text(size = 12),
+            legend.text = element_text(size = 10), 
+            legend.title = element_text(size = 12, face = "bold"),
+            legend.position = "bottom", 
+            legend.direction = "horizontal", 
+            legend.box = "horizontal",
+            plot.margin = unit(c(t = 5.5, r = 5.5, b = 0, l = 5.5), "pt"), # remove bottom padding of plot
+            strip.switch.pad.grid = unit(0.5, "cm"), # add panel padding
+            strip.placement = "outside", # place strips outside plotting space
+            strip.background = element_rect(colour = NA), # remove panel border
+            strip.text.x = element_text(size = 14), # set x-axis strip font size
+            strip.text.y = element_text(size = 12)) # set y-axis strip font size
+  
+```
+
+```{r Figure 3C - Variation in community composition explained by soil compartment and crop rotation, echo = F}
+
+# calculate count per million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert raw reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("N")) %>% # keep November samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# record PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Seedling") %>% mutate(COMMUNITY = "Bacterial"))
+
+# calculate count per million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert raw reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("M")) %>% # keep March samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Stem extension") %>% mutate(COMMUNITY = "Bacterial"))
+  
+# calculate count per million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert raw reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("J")) %>% # keep June samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# create data frame of metadata 
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Pre-harvest") %>% mutate(COMMUNITY = "Bacterial"))
+
+# plot PERMANOVA results for DNA viral, ssRNA phage, and bacterial communities
+  C <- 
+    df2 %>% 
+    filter(Factor == "ROTATION" | Factor == "COMPARTMENT") %>% 
+    mutate(Factor = ifelse(Factor == "ROTATION", "Rotation", "Compartment")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    mutate(COMMUNITY = fct_relevel(COMMUNITY, "Bacterial", "ssRNA phage", "DNA viral")) %>% 
+    filter(`Pr(>F)` < 0.05) %>% # keep significant contributions
+    select(Factor, R2, COMMUNITY, MONTH) %>% 
+    arrange(COMMUNITY) %>% 
+    ggplot(aes(x = MONTH, y = R2*100)) +
+      geom_line(aes(group = COMMUNITY, colour = COMMUNITY), size = 1) + # connect time points
+      geom_point(aes(fill = COMMUNITY),
+                 size = 3, alpha = 0.8, stroke = 1, colour = "grey25", shape = 21) + # scatter plot
+      facet_rep_grid(~ Factor, repeat.tick.labels = T, scales = "free") +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1))) + # override fill legend guide
+      scale_fill_manual(values = c("blue", "red", "gray80"), breaks = c("ssRNA phage", "DNA viral", "Bacterial")) +
+      scale_colour_manual(values = c("blue", "red", "gray80"), breaks = c("ssRNA phage", "DNA viral", "Bacterial")) + 
+      scale_y_continuous(limits = c(0, 50),
+                         breaks = seq(0, 50, 10)) +
+      theme(legend.position = "right",
+            legend.direction = "vertical",
+            legend.box = "vertical",
+            legend.box.just = "left",
+            axis.text = element_text(size = 10),
+            axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+            axis.title = element_text(size = 12),
+            legend.title = element_text(size = 12, face = "bold"),
+            legend.text = element_text(size = 10),
+            plot.margin = unit(c(t = 0, r = 5.5, b = 0, l = 5.5), "pt"),
+            strip.placement = "outside",
+            strip.text.x = element_text(size = 14),
+            strip.background = element_rect(colour = NA)) +
+      labs(x = "",
+           y = "Variation explained (%)",
+           fill = "Community:",
+           colour = "Community:",
+           title = "")
+  
+```
+
+```{r Save Figure 3 - Diversity in viral community composition}
+  
+  grob <- ggplotGrob(A)
+  idx <- which(grob$layout$name %in% c("axis-l-2", "axis-b-1", "axis-l-2-3", "axis-b-3"))
+  for (i in idx) grob$grobs[[i]] <- nullGrob() # remove facets
+  top <- plot_grid(grob, labels = "A", label_size = 20)
+  
+  grob <- ggplotGrob(B)
+  idx <- which(grob$layout$name %in% c("axis-l-2", "axis-b-1", "axis-l-2-3", "axis-b-3"))
+  for (i in idx) grob$grobs[[i]] <- nullGrob() # remove facets
+  middle <- plot_grid(grob, labels = "B", label_size = 20)
+  
+  bottom <- plot_grid(C, labels = "C", label_size = 20)
+
+  plot <- plot_grid(top, middle, bottom, nrow = 3, rel_heights = c(5, 5, 3)) # combine plots
+  
+# save as pdf 12 x 8 inches
+  pdf(file = here("Figures/Figure_3.pdf"),
+      width = 8, height = 12)
+  plot
+  dev.off()
+
+```
+
+```{r ANOVA on effect of compartment on alpha diversity of DNA and RNA viral communities}
+
+  # aov <- aov(`Shannon (H)` ~ Compartment * Rotation * Month, data = alpha_div_rna)
+  # summary(aov)
+  # TukeyHSD(aov)$`Compartment`
+
+  # aov <- aov(`Shannon (H)` ~ Compartment * Rotation, data = alpha_div_dna)
+  # summary(aov)
+  # TukeyHSD(aov)$`Compartment`
+
+```
+
+```{r Supplementary Table S6 - perMANOVA testing of contribution of soil compartment, crop rotation strategy and growth stage on viral and bacterial community composition, echo = F}
+
+# calculate count per kilobase million (CPKBM) values across samples for ssRNA phage vOTUs
+  CPM_table <- 
+    ssRNA_phage_vOTUs %>% 
+    column_to_rownames("vOTU") %>%
+    mutate(across(C1RH_J:V4S_N, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+
+# create data frame of metadata 
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "N", "M", "J")) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extesnion" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT + MONTH, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_rna <- as_tibble(div, rownames = "Factor")
+  
+# calculate count per kilobase million (CPKBM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>%
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert raw reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(C1RH_J:V4S_N) %>% 
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+
+# create data frame of metadata 
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "N", "M", "J")) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extesnion" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT + MONTH, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_bac <- as_tibble(div, rownames = "Factor")
+  
+# create flextable of PERMAONVA results
+  table <- 
+    rbind(df2 %>% mutate(PHAGE = paste(COMMUNITY, " community (", MONTH, ")", sep = "")) %>% select(-MONTH, -COMMUNITY),
+          div_rna %>% mutate(PHAGE = "ssRNA phage community (All time points)"),
+          div_bac %>% mutate(PHAGE = "Bacterial community (All time points)")) %>%
+      mutate(Factor = fct_recode(Factor, "Growth stage" = "MONTH",
+                                         "Rotation" = "ROTATION",
+                                         "Compartment" = "COMPARTMENT")) %>%
+      mutate(PHAGE = fct_relevel(PHAGE,
+                                 "DNA viral community (Stem extension)",
+                                 "ssRNA phage community (All time points)",
+                                 "ssRNA phage community (Seedling)",
+                                 "ssRNA phage community (Stem extension)",
+                                 "ssRNA phage community (Pre-harvest)",
+                                 "Bacterial community (All time points)",
+                                 "Bacterial community (Seedling)",
+                                 "Bacterial community (Stem extension)",
+                                 "Bacterial community (Pre-harvest)")) %>% 
+      arrange(PHAGE) %>% 
+      as_grouped_data(groups = c("PHAGE"), columns = NULL) %>%
+      as_flextable() %>% # create flextable
+      align(align = "left", part = "all") %>% # left-align
+      compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
+              j = "Factor", # on column "Factor"
+              value = as_paragraph(as_chunk(PHAGE))) %>% # create a paragraph containing a chunk containing value of `PHAGE`
+      hline(i = ~ !is.na(PHAGE), border = officer::fp_border() ) %>%
+      autofit()
+
+  save_as_docx(table, path = here("Tables/Table_S6.docx"))
+  dev.off()
+
+```
+
+```{r Correlation between bacterial community composition and DNA and RNA viral communities, echo = F}
+
+# calculate count per kilobase million (CPKBM) values across samples for ssRNA phage vOTUs
+  CPM_table <- 
+    ssRNA_phage_vOTUs %>% 
+    column_to_rownames("vOTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray_RNA <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis distances
+  
+# calculate count per million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>%  
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert raw reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(colnames(CPM_table)) # select samples which we have ssRNA phage data for
+
+# save Bray-Curtis dissimilarity matrix
+  Bray_16S <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# run mantel test
+  mantel <- mantel(Bray_RNA, 
+                   Bray_16S, 
+                   permutations = 9999, method = "pearson")
+  # r = 0.4642, p = 0.0001
+  
+# calculate count per kilobase million (CPKBM) values across samples for DNA vOTUs
+  CPM_table <- 
+    DNA_vOTUs %>% 
+    column_to_rownames("vOTU") %>%
+    mutate(across(C1RH:V4S, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH:V4S, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH:V4S, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH:V4S) 
+
+# save Bray-Curtis dissimilarity matrix
+  Bray_DNA <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate count million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>%
+    select(contains("M")) %>%
+    rename_with(.cols = everything(), ~str_extract(., "[^_]+")) %>% # remove month from sample names
+    mutate(across(C1RH:V4S, ~(./sum(.))*1e6)) %>% # convert raw reads to counts per million
+    mutate(across(C1RH:V4S, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(colnames(CPM_table)) # select samples which we have dsDNA vOTU data for
+
+# save Bray-Curtis dissimilarity matrix
+  Bray_16S <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# run mantel test
+  mantel <- mantel(Bray_DNA, 
+                   Bray_16S, 
+                   permutations = 9999, method = "pearson")
+  # r = 0.3301, p = 0.0039
+
+```
+
+```{r Supplementary Figure S4 - Summed mean relative abundance of Leviviricetes families, echo = F}
+
+# calculate count per kilobase million (CPKBM) values across samples for ssRNA phage vOTUs
+  df <- 
+    ssRNA_phage_vOTUs %>%
+    column_to_rownames("vOTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENOME_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    group_by(FAMILY) %>% 
+    summarise(across(C1RH_J:V4S_N, ~sum(.))) %>% 
+    gather(key = "SAMPLE_REPEAT", value = "TPM", -FAMILY) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_recode(MONTH, "Seedling" = "N", 
+                                     "Stem extension" = "M",
+                                     "Pre-harvest" = "J")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH",
+                               "Continuous" = "CRO",
+                               "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH",
+                               "Roots" = "CRO",
+                               "Roots" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_relevel(COMPARTMENT, "Bulk Soil", "Rhizosphere", "Roots"))
+
+# plot relative abundance by Leviviricetes family
+  plot <-
+    df %>% 
+      group_by(FAMILY, COMPARTMENT, MONTH) %>% 
+      summarise(MEAN = mean(TPM), .groups = "drop") %>% 
+      mutate(PROP = MEAN/1e6) %>% 
+      ggplot(aes(x = MONTH, y = PROP, fill = FAMILY)) +
+        geom_bar(stat = "identity", position = "stack") +
+        scale_fill_manual(values = c("#E7298A", "#D95F02", "#7570B3", "#1B9E77", "#66A61E")) +
+        facet_grid(cols = vars(COMPARTMENT)) +
+        theme(legend.position = "right", 
+              axis.text = element_text(size = 10),
+              axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+              axis.title = element_text(size = 12),
+              legend.title = element_text(size = 12, face = "bold"), 
+              legend.text = element_text(size = 10),
+              strip.switch.pad.grid = unit(0.5, "cm"),
+              strip.placement = "outside",
+              strip.background = element_rect(colour = NA),
+              strip.text = element_text(size = 14)) +
+        labs(x = "",
+             y = "Mean relative abundance",
+             fill = "Family:")
+  
+# save as pdf 6 x 8 inches
+  pdf(file = here("Figures/Figure_S4.pdf"),
+      width = 8, height = 6)
+  plot
+  dev.off()
+
+```
+
+## Continuous cropping drives the emergence of distinct, active DNA viruses in seedling rhizospheres
+
+```{r Supplementary Figure S5 - Detection of active vOTUs, echo = F}
+
+# create a list of active vOTUs
+  active_viruses <- 
+    gene_reads %>% 
+    gather(key = "SAMPLE_REPEAT", value = "READS", C1RH_J:V4S_N) %>% # convert to long format
+    filter(READS > 0) %>% # keep genes with reads mapped
+    group_by(vOTU, GENOME_LENGTH, SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_GENES = n_distinct(GENE),.groups = "drop") %>% # count the number of genes with reads mapped per contig per sample
+    filter(NUM_ACTIVE_GENES / (GENOME_LENGTH/10000) >= 1) %>% # remove vOTUs with less than 1 active gene per 10kb
+    select(vOTU) %>% 
+    unique()
+
+# create a data frame of number of active vOTUs detected per soil sample
+  df <- 
+    gene_reads %>% 
+    gather(key = "SAMPLE_REPEAT", value = "READS", C1RH_J:V4S_N) %>% # convert to long format
+    filter(READS > 0) %>% # keep genes with reads mapped
+    group_by(vOTU, GENOME_LENGTH, SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_GENES = n_distinct(GENE), .groups = "drop") %>% # count the number of genes with reads mapped per contig per sample
+    filter(NUM_ACTIVE_GENES / (GENOME_LENGTH/10000) >= 1) %>% # remove vOTUs with less than 1 active gene per 10kb
+    group_by(SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_vOTUs = n_distinct(vOTU)) %>% # count the number of distinct active vOTUs
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(SAMPLE = as.factor(SAMPLE)) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>%
+    mutate(MONTH = fct_recode(MONTH,
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>%
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS",
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CRO",
+                                 "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                                 "Bulk Soil" = "CS",
+                                 "Bulk Soil" = "VS",
+                                 "Rhizosphere" = "CRH",
+                                 "Rhizosphere" = "VRH",
+                                 "Roots" = "CRO",
+                                 "Roots" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_relevel(COMPARTMENT, "Bulk Soil", "Rhizosphere", "Roots")) %>% 
+    group_by(SAMPLE, MONTH, ROTATION, COMPARTMENT) %>% 
+    summarise(MEAN = mean(NUM_ACTIVE_vOTUs),
+              CI = qt(0.95, n()-1)*sd(NUM_ACTIVE_vOTUs)/sqrt(n()), .groups = "drop") # compute mean and confidence intervals
+    
+# plot the number of active vOTUs across soil samples
+  plot <-
+    ggplot(df, aes(x = MONTH, y = MEAN)) +
+      geom_errorbar(aes(ymax = MEAN + CI, ymin = MEAN - CI, colour = ROTATION),
+                    width = 0.2, position = position_dodge(0.3)) +
+      geom_line(aes(group = interaction(ROTATION, COMPARTMENT), colour = ROTATION), size = 1, position = position_dodge(0.3)) +
+      geom_point(size = 3, stroke = 1, colour = "grey25", alpha = 0.8, position = position_dodge(0.3),
+                 aes(fill = ROTATION, shape = COMPARTMENT)) + 
+      facet_grid(cols = vars(COMPARTMENT)) +
+      labs(x = "",
+           y = "Number of active vOTUs",
+           fill = "Rotation:",
+           colour = "Rotation:",
+           shape = "Compartment:") +
+      scale_y_continuous(limits = c(0, 600),
+                         breaks = seq(0, 600, 100)) +
+      scale_colour_manual(values = cbPalette,
+                        limits = c("Continuous", "Virgin")) + 
+      scale_fill_manual(values = cbPalette,
+                        limits = c("Continuous", "Virgin")) + 
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1)),
+             shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1))) +
+      theme(axis.text = element_text(size = 10),
+            axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+            axis.title = element_text(size = 12), 
+            legend.position = "bottom",
+            legend.title = element_text(size = 12, face = "bold"),
+            legend.text = element_text(size = 10), 
+            strip.switch.pad.grid = unit(0.5, "cm"),
+            strip.placement = "outside",
+            strip.background = element_rect(colour = NA),
+            strip.text = element_text(size = 14))
+
+# save as pdf 6 x 8 inches
+  pdf(file = here("Figures/Figure_S5.pdf"),
+      width = 8, height = 6)
+  plot
+  dev.off()
+  
+```
+
+```{r ANOVA on effect of compartment, crop rotation, and growth stage on the number of active vOTUs detected, echo = F}
+
+# create a data frame of number of active vOTUs detected per soil sample
+  df <- 
+    gene_reads %>% 
+    gather(key = "SAMPLE_REPEAT", value = "READS", C1RH_J:V4S_N) %>% # convert to long format
+    filter(READS > 0) %>% # keep genes with reads mapped
+    group_by(vOTU, GENOME_LENGTH, SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_GENES = n_distinct(GENE), .groups = "drop") %>% # count the number of genes with reads mapped per contig per sample
+    filter(NUM_ACTIVE_GENES / (GENOME_LENGTH/10000) >= 1) %>% # remove vOTUs with less than 1 active gene per 10kb
+    group_by(SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_vOTUs = n_distinct(vOTU)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(SAMPLE = as.factor(SAMPLE)) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>%
+    mutate(MONTH = fct_recode(MONTH,
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre harvest" = "J")) %>%
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre harvest")) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS",
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CRO",
+                                 "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                                 "Bulk Soil" = "CS",
+                                 "Bulk Soil" = "VS",
+                                 "Rhizosphere" = "CRH",
+                                 "Rhizosphere" = "VRH",
+                                 "Roots" = "CRO",
+                                 "Roots" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_relevel(COMPARTMENT, "Bulk Soil", "Rhizosphere", "Roots"))
+  
+  # aov <- aov(NUM_ACTIVE_vOTUs ~ COMPARTMENT * ROTATION * MONTH, data = df)
+  # summary(aov)
+  # TukeyHSD(aov)$`COMPARTMENT`
+  
+  # as_tibble(TukeyHSD(aov)$`COMPARTMENT:ROTATION:MONTH`, rownames = "COMPARISON") %>% 
+  #   separate(COMPARISON, into = c("COMP1", "COMP2"), sep = "-") %>% 
+  #   filter(grepl("Continuous", COMP1) & grepl ("Virgin", COMP2) |
+  #            grepl("Virgin", COMP1) & grepl ("Continuous", COMP2)) %>% 
+  #   filter(grepl("Rhizosphere", COMP1) & grepl ("Rhizosphere", COMP2) |
+  #            grepl("Roots", COMP1) & grepl ("Roots", COMP2) |
+  #            grepl("Bulk Soil", COMP1) & grepl ("Bulk Soil", COMP2)) %>% 
+  #   filter(grepl("Seedling", COMP1) & grepl ("Seedling", COMP2) |
+  #            grepl("Stem extension", COMP1) & grepl ("Stem extension", COMP2) |
+  #            grepl("Pre harvest", COMP1) & grepl ("Pre harvest", COMP2))
+    # the only significant difference in the number of active vOTUs between rotation practices at the seedling growth stage was in the rhizosphere
+
+```
+
+```{r Supplementary Figure S6 - Summed mean relative activity of rhizosphere-priming vOTUs, echo = F}
+
+# create a data frame of presence/absence of active vOTUs across soil samples
+  df <- 
+    gene_reads %>%
+    gather(key = "SAMPLE_REPEAT", value = "READS", C1RH_J:V4S_N) %>% # convert to long format
+    filter(READS > 0) %>% # keep genes with reads mapped
+    group_by(vOTU, GENOME_LENGTH, SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_GENES = n_distinct(GENE), .groups = "drop") %>% # count the number of genes with reads mapped per contig per sample
+    filter(NUM_ACTIVE_GENES / (GENOME_LENGTH/10000) >= 1) %>% # remove vOTUs with less than 1 active gene per 10kb
+    mutate(SAMPLE_MONTH = gsub('[[:digit:]]', '', SAMPLE_REPEAT)) %>% 
+    select(vOTU, SAMPLE_MONTH) %>% 
+    unique() %>% 
+    mutate(HIT = 1) %>% 
+    spread(key = "SAMPLE_MONTH", value = "HIT", fill = 0)
+
+# save rhizosphere-priming vOTUs
+  priming_vOTUs <- 
+    df %>% 
+    filter(CRH_N == 1 & VRH_N == 0) %>% # select vOTUs active in seedling rhizosphere only under continuous cropping
+    pull(vOTU)
+  
+# create data frame of proportion of community activity contributed by rhizosphere-priming viruses
+  df <- 
+    gene_reads %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to transcripts per kb million
+    filter(vOTU %in% priming_vOTUs) %>% # keep just rhizosphere-priming vOTUs
+    gather(key = "SAMPLE_REPEAT", value = "TPM", C1RH_J:V4S_N) %>% # convert to long format
+    group_by(SAMPLE_REPEAT) %>% 
+    summarise(PROP_TPM = sum(TPM)/1e6, .groups = "drop") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                                "Seedling" = "N",
+                                "Stem extension" = "M",
+                                "Pre-harvest" = "J")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    group_by(SAMPLE, MONTH) %>% 
+    summarise(MEAN = mean(PROP_TPM),
+              CI = qt(0.95, n()-1)*sd(PROP_TPM)/sqrt(n()), .groups = "drop") %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS",
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CRO",
+                                 "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                                 "Bulk Soil" = "CS",
+                                 "Bulk Soil" = "VS",
+                                 "Rhizosphere" = "CRH",
+                                 "Rhizosphere" = "VRH",
+                                 "Roots" = "CRO",
+                                 "Roots" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_relevel(COMPARTMENT, "Bulk Soil", "Rhizosphere", "Roots"))
+  
+# plot the proportion of community activity contributed by rhizosphere-priming viruses
+  plot <-
+    ggplot(df, aes(x = MONTH, y = MEAN)) +
+      geom_errorbar(aes(ymax = MEAN + CI, ymin = MEAN - CI, colour = ROTATION),
+                    width = 0.2, position = position_dodge(0.3)) +
+      geom_line(aes(group = interaction(ROTATION, COMPARTMENT), colour = ROTATION), size = 1, position = position_dodge(0.3)) +
+      geom_point(size = 3, stroke = 1, colour = "grey25", alpha = 0.8, position = position_dodge(0.3),
+                 aes(fill = ROTATION, shape = COMPARTMENT)) + 
+      facet_grid(cols = vars(COMPARTMENT)) +
+      labs(x = "",
+           y = "Proportion of viral community activity",
+           fill = "Rotation:",
+           colour = "Rotation:",
+           shape = "Compartment:") +
+      scale_y_continuous(limits = c(0, 0.25),
+                         breaks = seq(0, 0.25, 0.05)) +
+      scale_colour_manual(values = cbPalette,
+                        limits = c("Continuous", "Virgin")) + 
+      scale_fill_manual(values = cbPalette,
+                        limits = c("Continuous", "Virgin")) + 
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1)),
+             shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1))) +
+      theme(axis.text = element_text(size = 10),
+            axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+            axis.title = element_text(size = 12), 
+            legend.position = "bottom",
+            legend.title = element_text(size = 12, face = "bold"), 
+            legend.text = element_text(size = 10), 
+            strip.switch.pad.grid = unit(0.5, "cm"),
+            strip.placement = "outside",
+            strip.background = element_rect(colour = NA),
+            strip.text = element_text(size = 14)) 
+  
+# save as pdf 6 x 8 inches
+  pdf(file = here("Figures/Figure_S6.pdf"),
+      width = 8, height = 6)
+  plot
+  dev.off()
+    
+```
+
+```{r Supplementary Figure S7A - Linear relationship between the number of active vOTUs detected and summed host abundance, echo = F}
+
+# create a list of active vOTUs
+  active_viruses <- 
+    gene_reads %>% 
+    gather(key = "SAMPLE_REPEAT", value = "READS", C1RH_J:V4S_N) %>% # convert to long format
+    filter(READS > 0) %>% # keep genes with reads mapped
+    group_by(vOTU, GENOME_LENGTH, SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_GENES = n_distinct(GENE), .groups = "drop") %>% # count the number of genes with reads mapped per contig per sample
+    filter(NUM_ACTIVE_GENES / (GENOME_LENGTH/10000) >= 1) %>% # remove vOTUs with less than 1 active gene per 10kb
+    select(vOTU) %>% 
+    unique()
+
+# create a data frame of active virus hosts
+  active_virus_hosts <- 
+    active_viruses %>% 
+    left_join(select(DNA_vOTUs, c(vOTU, HOST_GENUS)), by = "vOTU") %>% 
+    mutate(HOST_GENUS = case_when(vOTU == "HM066936" ~ "Caulobacter", # add knwon hosts of active reference phages
+                                  vOTU == "MH271321" ~ "Microbacterium",
+                                  vOTU == "MH399789" ~ "Arthrobacter",
+                                  vOTU == "MH509447" ~ "Microbacterium",
+                                  vOTU == "MH536826" ~ "Gordonia",
+                                  vOTU == "MN905546" ~ "Pseudomonas",
+                                  vOTU == "NC_001609" ~ "Enterobacteria",
+                                  vOTU == "NC_003714" ~ "Pseudomonas",
+                                  vOTU == "NC_003715" ~ "Pseudomonas",
+                                  vOTU == "NC_003716" ~ "Pseudomonas",
+                                  vOTU == "NC_004821" ~ "Bacillus",
+                                  vOTU == "NC_010392" ~ "Salmonella",
+                                  vOTU == "NC_010463" ~ "Enterobacteria",
+                                  vOTU == "NC_020845" ~ "Prochlorococcus",
+                                  vOTU == "NC_020851" ~ "Synechococcus",
+                                  vOTU == "NC_020874" ~ "Prochlorococcus",
+                                  vOTU == "NC_020875" ~ "Synechococcus",
+                                  vOTU == "NC_021536" ~ "Synechococcus",
+                                  vOTU == "NC_025422" ~ "Caulobacter",
+                                  vOTU == "NC_048049" ~ "Synechococcus",
+                                  TRUE ~ HOST_GENUS)) %>% 
+    mutate(HOST_GENUS = case_when(is.na(HOST_GENUS) ~ "Unknown",
+                                  HOST_GENUS == "Unspecified" ~ "Unknown",
+                                  TRUE ~ HOST_GENUS))
+
+# extract total host relative abundance across samples
+  hosts <- 
+    OTU_table %>% 
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*100)) %>% # convert raw reads to percentage abundance
+    filter(GENUS %in% active_virus_hosts$HOST_GENUS) %>% # keep hosts of active vOTUs
+    summarise(across(where(is.numeric), sum)) %>%
+    gather(key = "SAMPLE_REPEAT", value = "REL_ABUNDANCE")
+  
+# create a data frame of number of active vOTUs detected per soil sample
+  active_virus_prevalence <- 
+    gene_reads %>% 
+    gather(key = "SAMPLE_REPEAT", value = "READS", C1RH_J:V4S_N) %>% # convert to long format
+    filter(READS > 0) %>% # keep genes with reads mapped
+    group_by(vOTU, GENOME_LENGTH, SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_GENES = n_distinct(GENE), .groups = "drop") %>% # count the number of genes with reads mapped per contig per sample
+    filter(NUM_ACTIVE_GENES / (GENOME_LENGTH/10000) >= 1) %>% # remove vOTUs with less than 1 active gene per 10kb
+    group_by(SAMPLE_REPEAT) %>% 
+    summarise(NUM_ACTIVE_vOTUs = n_distinct(vOTU))
+
+# create data frame of active vOTU prevalence and relative host abundance
+  df <- 
+    hosts %>% # input total host abundance per sample
+    right_join(active_virus_prevalence, by = "SAMPLE_REPEAT") %>% # join the number of active vOTUs detected per sample
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(SAMPLE = as.factor(SAMPLE)) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>%
+    mutate(MONTH = fct_recode(MONTH,
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>%
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS",
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CRO",
+                                 "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                                 "Bulk Soil" = "CS",
+                                 "Bulk Soil" = "VS",
+                                 "Rhizosphere" = "CRH",
+                                 "Rhizosphere" = "VRH",
+                                 "Roots" = "CRO",
+                                 "Roots" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_relevel(COMPARTMENT, "Bulk Soil", "Rhizosphere", "Roots"))
+
+# relative host abundance varies over compartment (and not across months!), so we need to account for compartment as a random effect when estimating the effect of the number of active vOTUs detected
+  lm <- lmer(REL_ABUNDANCE ~ NUM_ACTIVE_vOTUs + (1 | COMPARTMENT), data = df)
+  
+# save the coordinates of the model line for plotting
+  model_line <- 
+    get_model_data(lm, type = "pred", terms = c("NUM_ACTIVE_vOTUs")) %>% 
+    as_tibble()
+  
+# plot mixed effect model line over raw data
+  A <- 
+    ggplot(model_line, aes(x = x, y = predicted)) +
+      geom_point(data = df, aes(x = NUM_ACTIVE_vOTUs, y = REL_ABUNDANCE, fill = ROTATION, shape = COMPARTMENT), 
+                 size = 2, alpha = 0.5, stroke = 1, colour = "grey25") +
+      geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+                  fill = "grey", alpha = 0.5) +
+      geom_line(size = 1) +
+      annotate("text", x = 100, y = 15, label = paste("R^2 == ", round(r.squaredGLMM(lm)[1,2], 3)),
+               colour = "grey25", size = 3, parse = T) + # label with R2 values
+      scale_x_continuous(limits = c(0, 600),
+                         breaks = seq(0, 600, 100)) +
+      scale_y_continuous(limits = c(0, 60),
+                         breaks = seq(0, 60, 10)) +
+      scale_fill_manual(values = cbPalette, breaks = c("Continuous", "Virgin")) + 
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1, size = 3)),
+               shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1, size = 3))) +
+      labs(x = "Number of active vOTUs",
+           y = "Bacterial host relative abundance (%)",
+           fill = "Rotation:",
+           shape = "Compartment:",
+           title = "") +
+      theme(axis.text = element_text(size = 10),
+            axis.title = element_text(size = 12),
+            legend.position = "none")
+  
+```
+
+```{r Supplementary Table S7 - Mixed effect model output for linear relationship between the number of active vOTUs detected and relative host abundance, echo = F}
+
+# save linear mixed effect model output
+  table <- tab_model(lm, digits = 3, digits.p = 4, 
+                     pred.labels = c("Intercept", "Number of active vOTUs"),
+                     dv.labels = c("Bacterial host relative abundance"))
+
+  table
+# copy plot from viewer window
+
+```
+
+```{r Supplementary Figure S7B - Linear relationship between the number of active vOTUs detected and bacterial community alpha diversity, echo = F}
+
+# calculate counts per million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert raw reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~round(.))) %>% # round counts per kb million values
+    select(C1RH_J:V4S_N)
+
+# generate phyloSeq OTU matrix
+  OTU_matrix <- otu_table(CPM_table, taxa_are_rows = TRUE) # create PhyloSeq object
+
+# create table of bacterial diversity by sample repeat
+  bacterial_diversity <-
+    estimate_richness(OTU_matrix) %>%
+    rownames_to_column("SAMPLE_REPEAT")
+  
+# create data frame of active vOTU prevalence and bacterial community alpha diversity
+  df <- 
+    as_tibble(bacterial_diversity) %>% 
+    right_join(active_virus_prevalence, by = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(SAMPLE = as.factor(SAMPLE)) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>%
+    mutate(MONTH = fct_recode(MONTH,
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>%
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS",
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CRO",
+                                 "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                                 "Bulk Soil" = "CS",
+                                 "Bulk Soil" = "VS",
+                                 "Rhizosphere" = "CRH",
+                                 "Rhizosphere" = "VRH",
+                                 "Roots" = "CRO",
+                                 "Roots" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_relevel(COMPARTMENT, "Bulk Soil", "Rhizosphere", "Roots"))
+  
+# Shannon diversity varies over compartment (and not across months!), so we need to account for compartment as a random effect when estimating the effect of the number of active vOTUs detected
+  lm <- lmer(Shannon ~ NUM_ACTIVE_vOTUs + (1 | COMPARTMENT), data = df)
+
+# save the coordinates of the model line for plotting
+  model_line <- 
+    get_model_data(lm, type = "pred", terms = c("NUM_ACTIVE_vOTUs")) %>% 
+    as_tibble()
+  
+# plot mixed effect model line over raw data
+  B <- 
+    ggplot(model_line, aes(x = x, y = predicted)) +
+      geom_point(data = df, aes(x = NUM_ACTIVE_vOTUs, y = Shannon, fill = ROTATION, shape = COMPARTMENT), 
+                 size = 2, alpha = 0.5, stroke = 1, colour = "grey25") +
+      geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+                  fill = "grey", alpha = 0.5) +
+      geom_line(size = 1) +
+      annotate("text", x = 100, y = 9, label = paste("R^2 == ", round(r.squaredGLMM(lm)[1,2], 3)),
+               colour = "grey25", size = 3, parse = T) +
+      scale_x_continuous(limits = c(0, 600),
+                         breaks = seq(0, 600, 100)) +
+      scale_y_continuous(limits = c(5, 9.2),
+                         breaks = seq(5, 9, 1)) +
+      scale_fill_manual(values = cbPalette, breaks = c("Continuous", "Virgin")) + 
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1, size = 3)),
+               shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1, size = 3))) +
+      labs(x = "Number of active vOTUs",
+           y = "Bacterial community alpha diversity",
+           fill = "Rotation:",
+           shape = "Compartment:",
+           title = "") +
+      theme(axis.text = element_text(size = 10),
+            axis.title = element_text(size = 12),
+            legend.spacing.y = unit(-0.2, "cm"),
+            legend.text = element_text(size = 10), 
+            legend.title = element_text(size = 12, face = "bold"),
+            legend.position = "bottom", 
+            legend.direction = "horizontal", 
+            legend.box = "vertical")
+  
+```
+
+```{r Save Figure S7 - Linear relationship between the number of active vOTUs detected and A summed host abundance and B bacterial community alpha diversity}
+
+  legend <- get_legend(B) # get legend from A
+  B <- B + theme(legend.position = "none") # remove legend from B to plot
+  
+  plot <- plot_grid(A, B, legend, ncol = 1, rel_heights = c(0.9, 0.9, 0.1), labels = c("A", "B"), label_size = 20) # combine plots
+  
+# save as pdf 10 x 6 inches
+  pdf(file = here("Figures/Figure_S7.pdf"),
+      width = 6, height = 10)
+  plot
+  dev.off()
+  
+```
+
+```{r Supplementary Table S8 - Mixed effect model output for linear relationship between the number of active vOTUs detected and bacterial community alpha diversity, echo = F}
+
+  table <- tab_model(lm, digits = 4, digits.p = 4,
+                     pred.labels = c("Intercept", "Number of active vOTUs"),
+                     dv.labels = c("Shannon's H"))
+
+  table
+# copy plot from viewer window
+
+```
+
+## Rhizosphere enrichment of DNA viral activity displays a spatial gradient
+
+```{r Figure 4A - Beta diversity of DNA viral community activity}
+
+# calculate transcripts per kilobase million (TPM) values across samples for viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    column_to_rownames("GENE") %>%
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("N")) %>% # keep November samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+
+# record MDS coordinates
+  df <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress) %>% mutate(PHAGE = "DNA viral")
+  
+# record PERMANOVA results
+  df2 <- 
+    as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Seedling") %>% mutate(COMMUNITY = "DNA viral")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("M")) %>% # keep March samples
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append MDS coordinates
+  df <- 
+    df %>% 
+    rbind(as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress) %>% mutate(PHAGE = "DNA viral"))
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Stem extension") %>% mutate(COMMUNITY = "DNA viral"))
+  
+# calculate transcripts per kilobase million (TPM) values across samples for viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    column_to_rownames("GENE") %>%
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("J")) %>% # keep June samples
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata 
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append MDS coordinates
+  df <- 
+    df %>% 
+    rbind(as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress) %>% mutate(PHAGE = "DNA viral"))
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Pre-harvest") %>% mutate(COMMUNITY = "DNA viral"))
+
+# create data frame of MDS stress values for plotting
+  stress_values <- 
+    df %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "N", "M", "J")) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    select(STRESS, PHAGE, MONTH) %>% 
+    unique() %>% 
+    mutate(x = c(0.6, 0.7, 0.25),
+           y = c(-0.25, -0.45, -0.7))
+  
+# plot NMDS ordinations
+  A <-
+    df %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "N", "M", "J")) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    ggplot(aes(MDS1,MDS2)) + # plot the two dimensions of nMDS analysis
+      geom_text(data = stress_values, aes(x = x, y = y, label = paste("Stress =", format(round(STRESS, 2), nsmall = 2))), size = 3) + # label with stress values
+      stat_ellipse(aes(fill = COMPARTMENT, colour = ROTATION), geom = 'polygon', level = 0.95, alpha = 0, linetype = 2, size = 0.9, show.legend = F) + # draw 95% confidence ellipses around sample repeats
+      geom_point(size = 3, alpha = 0.8, stroke = 1, colour = "grey25",
+                 aes(fill = ROTATION, shape = COMPARTMENT)) + # scatter plot
+      labs(x = "Coordinate 1",
+           y = "Coordinate 2",
+           shape = "Compartment:",
+           fill = "Rotation:",
+           title = "") +
+      facet_wrap(~ MONTH, drop = T, scales = "free") +
+      scale_fill_manual(values = cbPalette, breaks = c("Continuous", "Virgin")) +
+      scale_colour_manual(values = cbPalette, guide = "none") +
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1)),
+             shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1))) +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_text(size = 12),
+            legend.text = element_text(size = 10), 
+            legend.title = element_text(size = 12, face = "bold"),
+            legend.position = "bottom", 
+            legend.direction = "horizontal", 
+            legend.box = "horizontal",
+            plot.margin = unit(c(t = 5.5, r = 5.5, b = 0, l = 5.5), "pt"),
+            strip.switch.pad.grid = unit(0.5, "cm"),
+            strip.placement = "outside",
+            strip.background = element_rect(colour = NA),
+            strip.text.x = element_text(size = 14),
+            strip.text.y = element_text(size = 12))
+  
+```
+
+```{r Figure 4B - Variation in community activity explained by soil compartment and crop rotation}
+
+# plot PERMANOVA results
+  B <-
+    df2 %>% 
+    filter(Factor == "ROTATION" | Factor == "COMPARTMENT") %>% 
+    mutate(Factor = ifelse(Factor == "ROTATION", "Rotation", "Compartment")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    filter(`Pr(>F)` < 0.05) %>% # keep significant contributions
+    select(Factor, R2, COMMUNITY, MONTH) %>% 
+    arrange(COMMUNITY) %>% 
+    ggplot(aes(x = MONTH, y = R2*100)) +
+      geom_line(aes(group = COMMUNITY, colour = COMMUNITY), size = 1) +
+      geom_point(aes(fill = COMMUNITY),
+                 size = 3, alpha = 0.8, stroke = 1, colour = "grey25", shape = 21) + # scatter plot
+      facet_rep_grid(~ Factor, repeat.tick.labels = T, scales = "free") +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1))) + # override fill legend guide
+      scale_fill_manual(values = c("blue", "red", "gray80"), breaks = c("ssRNA phage", "DNA viral", "Bacterial")) + 
+      scale_colour_manual(values = c("blue", "red", "gray80"), breaks = c("ssRNA phage", "DNA viral", "Bacterial")) + 
+      scale_y_continuous(limits = c(0, 50),
+                         breaks = seq(0, 50, 10)) +
+      theme(legend.position = "right",
+            legend.direction = "vertical",
+            legend.box = "vertical", 
+            legend.box.just = "left",
+            axis.text = element_text(size = 10),
+            axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1),
+            axis.title = element_text(size = 12),
+            legend.title = element_text(size = 12, face = "bold"),
+            legend.text = element_text(size = 10),
+            plot.margin = unit(c(t = 0, r = 5.5, b = 0, l = 5.5), "pt"),
+            strip.placement = "outside",
+            strip.text.x = element_text(size = 14),
+            strip.background = element_rect(colour = NA)) +
+      labs(x = "",
+           y = "Variation explained (%)",
+           fill = "Community:",
+           colour = "Community:",
+           title = "")
+
+```
+
+```{r Save Figure 4 - Diversity in viral community activity}
+
+  grob <- ggplotGrob(A)
+  grob$heights[7] <- unit(0.5, "cm")
+
+  top <- plot_grid(grob, labels = "A", label_size = 20)
+  bottom <- plot_grid(B, labels = "B", label_size = 20)
+  plot <- plot_grid(top, bottom, nrow = 2, rel_heights = c(4, 3)) # combine plots
+
+# save as pdf 7 x 8 inches
+  pdf(file = here("Figures/Figure_4.pdf"),
+      width = 8, height = 7)
+  plot
+  dev.off()
+
+```
+
+```{r Supplementary Table S9 - perMANOVA testing of contribution of soil compartment and crop rotation strategy on viral community activity, echo = F}
+
+# create flextable of PERMANOVA results
+  table <- 
+    df2 %>% 
+    mutate(PHAGE = case_when(MONTH == "Seedling" ~ "Viral activity (Seedling)",
+                             MONTH == "Stem extension" ~ "Viral activity (Stem extension)",
+                             MONTH == "Pre-harvest" ~ "Viral activity (Pre-harvest)")) %>% 
+    select(-MONTH, -COMMUNITY) %>% 
+    mutate(Factor = fct_recode(Factor, "Rotation" = "ROTATION",
+                                       "Compartment" = "COMPARTMENT")) %>%
+    as_grouped_data(groups = c("PHAGE"), columns = NULL) %>%
+    as_flextable() %>% # create flextable
+    align(align = "left", part = "all") %>% # left-align
+    compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
+            j = "Factor", # on column "Factor"
+            # create a paragraph containing a chunk containing value of `PHAGE`
+            value = as_paragraph(as_chunk(PHAGE))) %>%
+    hline(i = ~ !is.na(PHAGE), border = officer::fp_border() ) %>%
+    autofit()
+
+  save_as_docx(table, path = here("Tables/Table_S9.docx"))
+  dev.off()
+  
+```
+
+```{r Supplementary Table S10 - perMANOVA testing of contribution of soil compartment and crop rotation strategy on viral community activity of viral fractions, echo = F}
+
+# calculate transcripts per kilobase million (TPM) values across samples for free-viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    filter(vOTU %in% filter(DNA_vOTUs, DNA_VIROME_PRESENCE > 0)$vOTU) %>% # keep the free-viral fraction
+    column_to_rownames("GENE") %>%
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("N")) %>% # keep November samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_free_N <- as_tibble(div, rownames = "Factor")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for free-viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    filter(vOTU %in% filter(DNA_vOTUs, DNA_VIROME_PRESENCE > 0)$vOTU) %>% # keep the free-viral fraction
+    column_to_rownames("GENE") %>%
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("M")) %>% # keep March samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata 
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run perMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save perMANOVA results
+  div_free_M <- as_tibble(div, rownames = "Factor")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for free-viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    filter(vOTU %in% filter(DNA_vOTUs, DNA_VIROME_PRESENCE > 0)$vOTU) %>% # keep the free-viral fraction
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("J")) %>% # keep November samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_free_J <- as_tibble(div, rownames = "Factor")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for pro-viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    filter(vOTU %in% filter(DNA_vOTUs, TOTAL_METAGENOME_PRESENCE > 0)$vOTU) %>% # keep the pro-viral fraction
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("N")) %>% # keep November samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT").
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_pro_N <- as_tibble(div, rownames = "Factor")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for pro-viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    filter(vOTU %in% filter(DNA_vOTUs, TOTAL_METAGENOME_PRESENCE > 0)$vOTU) %>% # keep the pro-viral fraction
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("M")) %>% # keep March samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_pro_M <- as_tibble(div, rownames = "Factor")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for pro-viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    filter(vOTU %in% filter(DNA_vOTUs, TOTAL_METAGENOME_PRESENCE > 0)$vOTU) %>% # keep the pro-viral fraction
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>%
+    select(contains("J")) %>% # keep June samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_pro_J <- as_tibble(div, rownames = "Factor")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for active-viral genes
+  TPM_table <- 
+    gene_reads %>%
+    filter(vOTU %in% filter(DNA_vOTUs, METATRANSCRIPTOME_PRESENCE > 0)$vOTU) %>% # keep the active-viral fraction
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("N")) %>% # keep November samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata 
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_active_N <- as_tibble(div, rownames = "Factor")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for active-viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    filter(vOTU %in% filter(DNA_vOTUs, METATRANSCRIPTOME_PRESENCE > 0)$vOTU) %>% # keep the active-viral fraction
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("M")) %>% # keep March samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_active_M <- as_tibble(div, rownames = "Factor")
+  
+# calculate transcripts per kilobase million (TPM) values across samples for active-viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    filter(vOTU %in% filter(DNA_vOTUs, METATRANSCRIPTOME_PRESENCE > 0)$vOTU) %>% # keep the active-viral fraction
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per kb million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("J")) %>% # keep June samples
+    select(!contains("RO")) # remove root samples
+
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(TPM_table), # input the square-root transformed TPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    column_to_rownames("SAMPLE_REPEAT")
+
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# save PERMANOVA results
+  div_active_J <- as_tibble(div, rownames = "Factor")
+  
+# create a flextable of PERMANOVA resultts
+  table <- 
+    rbind(div_free_N %>% mutate(PHAGE = "Activity of DNA virome-assembled vOTUs (Seedling)"),
+          div_free_M %>% mutate(PHAGE = "Activity of DNA virome-assembled vOTUs (Stem extension)"),
+          div_free_J %>% mutate(PHAGE = "Activity of DNA virome-assembled vOTUs (Pre-harvest)"),
+          div_pro_N %>% mutate(PHAGE = "Activity of total metagenome-assembled vOTUs (Seedling)"),
+          div_pro_M %>% mutate(PHAGE = "Activity of total metagenome-assembled vOTUs (Stem extension)"),
+          div_pro_J %>% mutate(PHAGE = "Activity of total metagenome-assembled vOTUs (Pre-harvest)"),
+          div_active_N %>% mutate(PHAGE = "Activity of metatranscriptome-assembled vOTUs (Seedling)"),
+          div_active_M %>% mutate(PHAGE = "Activity of metatranscriptome-assembled vOTUs (Stem extension)"),
+          div_active_J %>% mutate(PHAGE = "Activity of metatranscriptome-assembled vOTUs (Pre-harvest)")) %>% 
+      mutate(Factor = fct_recode(Factor, "Rotation" = "ROTATION",
+                                         "Compartment" = "COMPARTMENT")) %>% 
+      as_grouped_data(groups = c("PHAGE"), columns = NULL) %>%
+      as_flextable() %>% # create flextable
+      align(align = "left", part = "all") %>% # left-align
+      compose(i = ~ !is.na(PHAGE), # when PHAGE is not NA
+              j = "Factor", # on column "Factor"
+              # create a paragraph containing a chunk containing value of `PHAGE`
+              value = as_paragraph(as_chunk(PHAGE))) %>%
+      hline(i = ~ !is.na(PHAGE), border = officer::fp_border() ) %>%
+      autofit()
+
+  save_as_docx(table, path = here("Tables/Table_S10.docx"))
+  dev.off()
+
+```
+
+```{r Supplementary Figure S8 - Variation in dsDNA vOTU activity explained by crop rotation and soil compartment by recovery library, echo = F}
+
+  df_November <- 
+    bind_rows(div_free_N %>% mutate(PHAGE = "DNA virome"),
+              div_pro_N %>% mutate(PHAGE = "Total metagenome"),
+              div_active_N %>% mutate(PHAGE = "Metatranscriptome")) %>% 
+    select(Factor, R2, `Pr(>F)`, PHAGE) %>% 
+    mutate(MONTH = "Seedling") %>% 
+    filter(Factor == "ROTATION" | Factor == "COMPARTMENT")
+  
+  df_March <- 
+    bind_rows(div_free_M %>% mutate(PHAGE = "DNA virome"),
+              div_pro_M %>% mutate(PHAGE = "Total metagenome"),
+              div_active_M %>% mutate(PHAGE = "Metatranscriptome")) %>% 
+    select(Factor, R2, `Pr(>F)`, PHAGE) %>% 
+    mutate(MONTH = "Stem extension") %>% 
+    filter(Factor == "ROTATION" | Factor == "COMPARTMENT")
+  
+  df_June <- 
+    bind_rows(div_free_J %>% mutate(PHAGE = "DNA virome"),
+              div_pro_J %>% mutate(PHAGE = "Total metagenome"),
+              div_active_J %>% mutate(PHAGE = "Metatranscriptome")) %>% 
+    select(Factor, R2, `Pr(>F)`, PHAGE) %>% 
+    mutate(MONTH = "Pre-harvest") %>% 
+    filter(Factor == "ROTATION" | Factor == "COMPARTMENT")
+  
+  df <- 
+    bind_rows(df_November, df_March, df_June) %>% 
+    filter(`Pr(>F)` < 0.05) %>% 
+    mutate(Factor = fct_recode(Factor, "Compartment" = "COMPARTMENT", "Rotation" = "ROTATION")) %>%
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    mutate(PHAGE = fct_relevel(PHAGE, "DNA virome", "Total metagenome", "Metatranscriptome"))
+
+  plot <-
+    ggplot(df, aes(x = MONTH, y = R2*100)) +
+    geom_line(aes(group = PHAGE, colour = PHAGE), size = 1) +
+    geom_point(aes(fill = PHAGE),
+               size = 3, alpha = 0.8, stroke = 1, colour = "grey25", shape = 21) + # scatter plot
+    facet_rep_grid(cols = vars(Factor), repeat.tick.labels = T, scales = "free") +
+    guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1))) + # override fill legend guide
+    scale_fill_manual(values = cbPalette) +
+    scale_colour_manual(values = cbPalette) +
+    scale_y_continuous(limits = c(0, 80),
+                       breaks = seq(0, 80, 20)) +
+    theme(legend.position = "bottom", 
+          legend.direction = "horizontal", 
+          legend.box = "horizontal",
+          legend.box.just = "left",
+          axis.text = element_text(size = 10),
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+          axis.title = element_text(size = 12),
+          legend.title = element_text(size = 12, face = "bold"),
+          legend.text = element_text(size = 10),
+          legend.box.margin = margin(t = -20, r = 0, b = 0, l = -25), # remove pright and bottom padding of legend
+          strip.switch.pad.grid = unit(0.5, "cm"),
+          strip.placement = "outside",
+          strip.background = element_rect(colour = NA),
+          strip.text.x = element_text(size = 14)) +
+    labs(x = "",
+         y = "Variation explained (%)",
+         fill = "Recovery library:",
+         colour = "Recovery library:")
+  
+# save as pdf 6 x 8 inches
+  pdf(file = here("Figures/Figure_S8.pdf"),
+      width = 8, height = 6)
+  plot
+  dev.off()
+
+```
+
+```{r Supplementary Figure S9 - Summed mean relative compartment-enriched viral activity, echo = F}
+
+# create count table/matrix (gene by SAMPLE_REPEAT, filled with raw READS)
+  count_table <-
+    gene_reads %>% 
+    column_to_rownames("GENE") %>% 
+    select(C1RH_J:V4S_N) %>% 
+    filter(!rowSums(.) == 0) %>% # keep active genes
+    as.matrix() # make matrix
+
+# create column metadata table (COMPARTMENT, MONTH and ROTATION by SAMPLE)
+  metadata <- 
+    as_tibble(dimnames(count_table)[[2]]) %>% # input sample repeats in same order as in count_table
+    rename(REPEAT = value) %>%
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(REPEAT, "[^_]+"))) %>% 
+    mutate(MONTH = str_sub(REPEAT, -1)) %>% 
+    mutate(MONTH = fct_recode(MONTH,
+                              "November" = "N",
+                              "March" = "M",
+                              "June" = "J")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "November", "March", "June")) %>% 
+    mutate(SAMPLE = as.factor(SAMPLE)) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH",
+                               "Continuous" = "CRO",
+                               "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk_Soil" = "CS",
+                               "Bulk_Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH",
+                               "Roots" = "CRO",
+                               "Roots" = "VRO")) 
+    
+# construct DESeqDataSet object from the matrix of counts and the metadata table 
+  ddsFullCountTable <- DESeq2::DESeqDataSetFromMatrix(
+    countData = count_table, # input matrix with raw counts
+    colData = metadata, # input sample metadata
+    design = ~ COMPARTMENT + ROTATION + MONTH) # input design formula
+  
+# run DESeq2
+  dds <- DESeq(ddsFullCountTable, fitType = "local", quiet = T)
+
+# save log2 fold changes in gene transcript abundance  by soil compartment
+  res <- as_tibble(results(dds, contrast = c("COMPARTMENT", "Bulk_Soil", "Rhizosphere")), rownames = "GENE")
+  
+# record genes enriched in bulk soil (relative to rhizosphere soil)
+  signif_bulk_dna <- 
+    res %>% 
+    filter(padj < 0.05) %>% 
+    filter(log2FoldChange > 0) %>% 
+    pull("GENE")
+  
+# record gene enriched in rhizosphere soil (relative to bulk soil)
+  signif_rhiz_dna <- 
+    res %>% 
+    filter(padj < 0.05) %>% 
+    filter(log2FoldChange < 0) %>% 
+    pull("GENE")
+  
+# create data frame of mean total activity of soil compartment-enriched viral genes
+  dna.means <- 
+    gene_reads %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    gather(key = "SAMPLE_REPEAT", value = "TPM", C1RH_J:V4S_N) %>% 
+    mutate(SIGNIF = ifelse(GENE %in% signif_bulk_dna, "BULK_SOIL",
+                           ifelse(GENE %in% signif_rhiz_dna, "RHIZOSPHERE", "NS"))) %>% # label significant enrichment of genes
+    mutate(SIGNIF = factor(SIGNIF, levels = c("BULK_SOIL", "RHIZOSPHERE", "NS"))) %>% 
+    group_by(SAMPLE_REPEAT, SIGNIF) %>% 
+    summarise(SUM_TPM = sum(TPM), .groups = "drop") %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    mutate(SAMPLE = as.factor(SAMPLE)) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH",
+                               "Continuous" = "CRO",
+                               "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH",
+                               "Roots" = "CRO",
+                               "Roots" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_relevel(COMPARTMENT, "Bulk Soil", "Rhizosphere", "Roots")) %>% 
+    group_by(COMPARTMENT, ROTATION, MONTH, SIGNIF) %>% 
+    summarise(MEAN_SUM_TPM = mean(SUM_TPM), .groups = "drop")
+  
+# calculate percentage of compartment enriched activity in each compartment over time
+  # dna.means %>%
+  #   group_by(MONTH, COMPARTMENT, SIGNIF) %>%
+  #   summarise(SUM = sum(MEAN_SUM_TPM), .groups = "drop") %>%
+  #   group_by(MONTH, COMPARTMENT) %>%
+  #   mutate(PERCENT = (SUM/sum(SUM))*100) %>% 
+  #   filter(SIGNIF == "NS") %>% 
+  #   group_by(MONTH, COMPARTMENT) %>% 
+  #   summarise(COMPARTMENT_ENRICHED = 100 - PERCENT, .groups = "drop")
+    # minimum soil compartment-enriched activity was 77.6%
+
+# plot mean relative activity of soil compartment-enriched genes over time
+  plot <- 
+    ggplot(dna.means, aes(x = MONTH, y = MEAN_SUM_TPM, fill = SIGNIF)) +
+      geom_bar(stat = "identity", position = position_fill(reverse = T)) +
+      facet_grid(cols = vars(COMPARTMENT)) +
+      scale_fill_manual(breaks = c("NS", "RHIZOSPHERE", "BULK_SOIL"),
+                        labels = c("N.S.", "Rhizosphere", "Bulk soil"),
+                        values = c("grey", "#CC79A7", "#009E73")) +
+      theme(axis.text = element_text(size = 10),
+            axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+            axis.title = element_text(size = 12),
+            legend.text = element_text(size = 10),
+            legend.position = "right",
+            legend.direction = "vertical",
+            strip.switch.pad.grid = unit(0.5, "cm"),
+            strip.placement = "outside",
+            strip.background = element_rect(colour = NA),
+            strip.text.x = element_text(size = 14),
+            panel.border = element_blank()) +
+      labs(x = "",
+           y = "Mean relative activity",
+           fill = "")
+  
+# save as pdf 6 x 8 inches
+  pdf(file = here("Figures/Figure_S9.pdf"),
+      width = 8, height = 6)
+  plot
+  dev.off()
+
+```
+
+```{r Supplementary Figure S10 - Summed mean relative viral metabolic activity, echo = F}
+
+# calculate transcripts per kilobase million (TPM) values across samples for viral genes
+  TPM_table <- 
+    gene_reads %>% 
+    column_to_rownames("GENE") %>% 
+    mutate(across(C1RH_J:V4S_N, ~./(GENE_LENGTH/1000))) %>% # convert raw reads to reads per kb
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads per kb to counts per kb million
+    filter(COG_CATEGORY == "C" | COG_CATEGORY == "E" | COG_CATEGORY == "F" | COG_CATEGORY == "G" | COG_CATEGORY == "H" | COG_CATEGORY == "I" | COG_CATEGORY == "P" | COG_CATEGORY == "Q") # keep genes in metabolic COG categories
+
+# create data frame of relative activity of viral-encoded metabolic genes
+  df <- 
+    TPM_table %>% 
+    select(C1RH_J:V4S_N) %>% 
+    rownames_to_column("GENE") %>% 
+    gather(key = "SAMPLE_REPEAT", value = "TPM", -GENE) %>%
+    group_by(SAMPLE_REPEAT) %>% 
+    summarise(PROP_TPM = sum(TPM)/1e6) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_recode(MONTH, "Seedling" = "N", 
+                                     "Stem extension" = "M",
+                                     "Pre-harvest" = "J")) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "Seedling", "Stem extension", "Pre-harvest")) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH",
+                               "Continuous" = "CRO",
+                               "Virgin" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH",
+                               "Roots" = "CRO",
+                               "Roots" = "VRO")) %>% 
+    mutate(COMPARTMENT = fct_relevel(COMPARTMENT, "Bulk Soil", "Rhizosphere", "Roots"))
+  
+  # aov <- aov(PROP_TPM ~ COMPARTMENT * MONTH, data = df)
+  # summary(aov)
+  # TukeyHSD(aov)$`COMPARTMENT`
+  
+# plot the relative activity of viral metabolic genes over time
+  plot <-
+    df %>% 
+    group_by(SAMPLE, MONTH, ROTATION, COMPARTMENT) %>% 
+    summarise(MEAN = mean(PROP_TPM),
+              CI = qt(0.95, n()-1)*sd(PROP_TPM)/sqrt(n()), .groups = "drop") %>% 
+    ggplot(aes(x = MONTH, y = MEAN)) +
+      geom_errorbar(aes(ymax = MEAN + CI, ymin = MEAN - CI, colour = ROTATION),
+                    width = 0.2, position = position_dodge(0.3)) +
+      geom_line(aes(group = interaction(ROTATION, COMPARTMENT), colour = ROTATION), size = 1, position = position_dodge(0.3)) +
+      geom_point(size = 3, stroke = 1, colour = "grey25", alpha = 0.8, position = position_dodge(0.3),
+                 aes(fill = ROTATION, shape = COMPARTMENT)) +
+      facet_grid(cols = vars(COMPARTMENT)) +
+      labs(x = "",
+           y = "Proportion of viral community activity",
+           fill = "Rotation:",
+           colour = "Rotation:",
+           shape = "Compartment:") +
+      scale_y_continuous(limits = c(0, 0.65),
+                         breaks = seq(0, 0.6, 0.2)) +
+      scale_colour_manual(values = cbPalette,
+                        limits = c("Continuous", "Virgin")) + 
+      scale_fill_manual(values = cbPalette,
+                        limits = c("Continuous", "Virgin")) + 
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1)),
+             shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1))) +
+      theme(axis.text = element_text(size = 10),
+            axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+            axis.title = element_text(size = 12), 
+            legend.position = "bottom",
+            legend.title = element_text(size = 12, face = "bold"), 
+            legend.text = element_text(size = 10), 
+            strip.switch.pad.grid = unit(0.5, "cm"),
+            strip.placement = "outside",
+            strip.background = element_rect(colour = NA),
+            strip.text.x = element_text(size = 14))
+  
+# save as pdf 6 x 8 inches
+  pdf(file = here("Figures/Figure_S10.pdf"),
+      width = 8, height = 6)
+  plot
+  dev.off()
+
+```
+
+```{r Supplementary Figure S11 - Beta diversity in bacterial community composition, echo = F}
+
+# calculate counts per million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("N")) %>% # keep November samples
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis distances
+  
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS")) 
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# record MDS coordinates
+  df <- 
+    as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress)
+  
+# record PERMANOVA results
+  df2 <- 
+    as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Seedling")
+  
+# calculate counts per million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("M")) %>% # keep March samples
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilarities
+
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>%
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS")) %>%
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS")) 
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append MDS coordinates
+  df <- 
+    df %>% 
+    rbind(., as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress))
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Stem extension"))
+  
+# calculate counts per million (CPM) values across samples for 16S OTUs
+  CPM_table <- 
+    OTU_table %>% 
+    column_to_rownames("OTU") %>% 
+    mutate(across(C1RH_J:V4S_N, ~(./sum(.))*1e6)) %>% # convert reads to counts per million
+    mutate(across(C1RH_J:V4S_N, ~sqrt(.))) %>% # square-root transform counts per million values
+    select(C1RH_J:V4S_N) %>% 
+    select(contains("J")) %>% # keep June samples
+    select(!contains("RO")) # remove root samples
+    
+# save Bray-Curtis dissimilarity matrix
+  Bray <-
+    vegdist(t(CPM_table), # input the square-root transformed CPM values
+            method = "bray") # compute the Bray-Curtis dissimilaries
+
+# calculate nMDS ordination
+  MDS <- metaMDS(Bray,
+                 distance = "bray",
+                 autotransform = F,
+                 k = 2,
+                 trace = F)
+  
+# create data frame of metadata
+  metadata <- 
+    tibble(SAMPLE_REPEAT = colnames(CPM_table)) %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE,
+                                 "Continuous" = "CRH",
+                                 "Virgin" = "VRH",
+                                 "Continuous" = "CS",
+                                 "Virgin" = "VS")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE,
+                                    "Rhizosphere" = "CRH",
+                                    "Rhizosphere" = "VRH",
+                                    "Bulk Soil" = "CS",
+                                    "Bulk Soil" = "VS")) 
+  
+# run PERMANOVA on COMPARTMENT and ROTATION factors
+  div <- adonis2(Bray~ROTATION + COMPARTMENT, 
+                 data = metadata, 
+                 permutations = 999, 
+                 method = "bray")
+  
+# append MDS coordinates
+  df <- 
+    df %>% 
+    rbind(., as_tibble(MDS$points, rownames = "SAMPLE_REPEAT") %>% mutate(STRESS = MDS$stress))
+  
+# append PERMANOVA results
+  df2 <- 
+    df2 %>% 
+    rbind(as_tibble(div, rownames = "Factor") %>% mutate(MONTH = "Pre-harvest"))
+  
+# create data frame of NMDS stress values for plotting
+  stress_values <- 
+    df %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "N", "M", "J")) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    select(STRESS, MONTH) %>% 
+    unique() %>% 
+    mutate(x = c(-0.35, 0.15, -0.2),
+           y = c(0.2, -0.15, 0.3))
+  
+# plot NMDS coordinates
+  plot <-
+    df %>% 
+    mutate(SAMPLE = gsub('[[:digit:]]', '', str_extract(SAMPLE_REPEAT, "[^_]+"))) %>% 
+    mutate(ROTATION = fct_recode(SAMPLE, 
+                               "Continuous" = "CS",
+                               "Virgin" = "VS",
+                               "Continuous" = "CRH",
+                               "Virgin" = "VRH")) %>% 
+    mutate(COMPARTMENT = fct_recode(SAMPLE, 
+                               "Bulk Soil" = "CS",
+                               "Bulk Soil" = "VS",
+                               "Rhizosphere" = "CRH",
+                               "Rhizosphere" = "VRH")) %>% 
+    mutate(MONTH = str_sub(SAMPLE_REPEAT, -1)) %>% 
+    mutate(MONTH = fct_relevel(MONTH, "N", "M", "J")) %>% 
+    mutate(MONTH = fct_recode(MONTH, 
+                              "Seedling" = "N",
+                              "Stem extension" = "M",
+                              "Pre-harvest" = "J")) %>% 
+    ggplot(aes(MDS1,MDS2)) + # plot the two NMDS dimensions
+      geom_text(data = stress_values, aes(x = x, y = y, label = paste("Stress =", format(round(STRESS, 2), nsmall = 2))), size = 3) + # label with stress values
+      stat_ellipse(aes(fill = COMPARTMENT, colour = ROTATION), geom = 'polygon', level = 0.95, alpha = 0, linetype = 2, size = 0.9, show.legend = F) + # draw 95% confidence ellipses around sample repeats
+      geom_point(size = 3, alpha = 0.8, stroke = 1, colour = "grey25",
+                 aes(fill = ROTATION, shape = COMPARTMENT)) +
+      labs(x = "Coordinate 1",
+           y = "Coordinate 2",
+           shape = "Compartment:",
+           fill = "Rotation:",
+           title = "") +
+      facet_rep_grid(~ MONTH, drop = T, scales = "free") +
+      scale_fill_manual(values = cbPalette, breaks = c("Continuous", "Virgin")) +
+      scale_colour_manual(values = cbPalette, guide = "none") + 
+      scale_shape_manual(values = c(21, 24, 22), 
+                         breaks = c("Bulk Soil", "Rhizosphere", "Roots")) +
+      guides(fill = guide_legend(override.aes = list(shape = 21, alpha = 1)),
+             shape = guide_legend(override.aes = list(colour = "black", fill = "black", alpha = 1))) +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_text(size = 12),
+            legend.text = element_text(size = 10), 
+            legend.title = element_text(size = 12, face = "bold"),
+            legend.position = "bottom", 
+            legend.direction = "horizontal", 
+            legend.box = "horizontal",
+            plot.margin = unit(c(t = 5.5, r = 5.5, b = 0, l = 5.5), "pt"),
+            strip.switch.pad.grid = unit(0.5, "cm"),
+            strip.placement = "outside",
+            strip.background = element_rect(colour = NA),
+            strip.text.x = element_text(size = 14),
+            strip.text.y = element_text(size = 12)) 
+  
+# save as pdf 4 x 8 inches
+  pdf(file = here("Figures/Figure_S11.pdf"),
+      width = 8, height = 4)
+  plot
+  dev.off()
+
+```
