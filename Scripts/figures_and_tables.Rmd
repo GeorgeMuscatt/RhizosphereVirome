@@ -75,7 +75,7 @@ editor_options:
 
 ```{r Figure 2A - Shared protein content of recovered vOTUs with all currently available phage genomes as determined by vConTACT2, echo = F}
   
-# Note: nodes and edges have already beem extracted and saved to file to speed up running this script
+# Note: nodes and edges have already been extracted and saved to file to speed up running this script
 
 # import vConTACT2 network output
   # ntwk <-
