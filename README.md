@@ -1,6 +1,10 @@
 # README
 
-This repository contains the data and code used in Muscatt et al., 2022 ([preprint](https://www.biorxiv.org/content/10.1101/2022.04.22.488307v1)). Post-QC reads are available from the European Nucleotide Archive (ENA) under the Study Accession PRJEB49313. dsDNA vOTU genome sequences were deposited to ENA under Sample Accession SAMEA12363644. ssRNA phage vOTU genome sequences were deposited to ENA under Sample Accession SAMEA11777518. FASTA nucleotide files containing vOTU genomes, FASTA amino acid files containing vOTU genes, vOTU gene annotations, FASTA amino acid files containing ssRNA phage core protein sequences, Newick tree file containing ssRNA phage phylogeny, and vConTACT2 network input and output files are available from [figshare](https://doi.org/10.25392/leicester.data.19635336.v1).
+This repository contains the data and code used in Muscatt, G., Hilton, S., Raguideau, S. et al. Crop management shapes the diversity and activity of DNA and RNA viruses in the rhizosphere. Microbiome **10**, 181 (2022). [https://doi.org/10.1186/s40168-022-01371-3](https://microbiomejournal.biomedcentral.com/articles/10.1186/s40168-022-01371-3). 
+-   Post-QC reads are available from the European Nucleotide Archive (ENA) under the Study Accession PRJEB49313. Sample Accession information is included in Table S1.
+-   dsDNA vOTU genome sequences were deposited to ENA under Sample Accession SAMEA12363644. 
+-   ssRNA phage vOTU genome sequences were deposited to ENA under Sample Accession SAMEA11777518. 
+-   FASTA nucleotide files containing vOTU genomes, FASTA amino acid files containing vOTU genes, vOTU gene annotations, FASTA amino acid files containing ssRNA phage core protein sequences, Newick tree file containing ssRNA phage phylogeny, and vConTACT2 network input and output files are available from [figshare](https://doi.org/10.25392/leicester.data.19635336.v1).
 
 ------------------------------------------------------------------------
 
